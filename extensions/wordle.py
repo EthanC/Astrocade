@@ -358,6 +358,7 @@ class WordleOps:
             puzzle: WordlePuzzle | None = results.first()
 
             if not puzzle:
+                day: date = await WordleOps.get_puzzle_day(id, day)
                 solution: str = await WordleOps.get_puzzle_solution(day)
                 puzzle = WordlePuzzle(id=id, day=day, solution=solution)
 
