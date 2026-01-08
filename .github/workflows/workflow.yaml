@@ -32,7 +32,7 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Lowercase Repository Name
-        id: repo
+        id: repository
         run: |
           echo "name_lowercase=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
       - name: Build and Push to Docker Hub
