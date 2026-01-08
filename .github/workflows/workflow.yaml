@@ -1,0 +1,47 @@
+name: Primary
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  image:
+    name: Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Install Python
+        run: uv python install
+      - name: Install Dependencies
+        run: uv sync --dev
+      - name: Run ruff
+        run: uv run ruff check .
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+            username: ${{ secrets.DOCKER_HUB_USERNAME }}
+            password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build and Push to Docker Hub
+        uses: docker/build-push-action@v6
+        with:
+            context: .
+            file: ./Dockerfile
+            push: true
+            tags: ${{ secrets.DOCKER_HUB_USERNAME }}/${{ steps.repository.outputs.lowercase }}:latest
+      - name: Set Docker Hub Description
+        uses: peter-evans/dockerhub-description@v5
+        with:
+            username: ${{ secrets.DOCKER_HUB_USERNAME }}
+            password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+            repository: ${{ secrets.DOCKER_HUB_USERNAME }}/${{ steps.repository.outputs.lowercase }}
+            short-description: ${{ github.event.repository.description }}

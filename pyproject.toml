@@ -1,0 +1,40 @@
+[project]
+name = "astrocade"
+version = "1.0.0"
+description = "Discord Bot designed to expand and enhance Discord's built-in Activities and Games."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "environs>=14.5.0",
+    "hikari-arc>=2.1.1",
+    "httpx>=0.28.1",
+    "loguru>=0.7.3",
+    "loguru-discord>=2.1.0",
+    "sqlmodel>=0.0.31",
+    "uvloop>=0.22.1 ; sys_platform != 'win32'",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.10",
+    "ty>=0.0.10",
+]
+
+[tool.ruff]
+fix = true
+show-fixes = true
+
+[tool.ruff.format]
+docstring-code-format = true
+line-ending = "lf"
+skip-magic-trailing-comma = true
+
+[tool.ruff.lint]
+select = ["I", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false
