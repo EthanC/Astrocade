@@ -176,7 +176,7 @@ async def command_wordle_history(
 
     history: str = f"## Wordle History for {user.mention}"
     results: list[WordleResult] = sorted(
-        player.wordle_results, key=lambda r: r.puzzle_id
+        player.wordle_results, key=lambda r: r.puzzle_id, reverse=True
     )
     current: int = 0
 
