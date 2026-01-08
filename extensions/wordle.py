@@ -186,7 +186,7 @@ async def command_wordle_history(
                 result.puzzle_day.year, result.puzzle_day.month, result.puzzle_day.day
             ).timestamp()
         )
-        history += f"\n* [<t:{timestamp}:d>] ||{result.puzzle_solution}||: {('X' if result.attempts == -1 else f'{result.attempts:,}')}/6"
+        history += f"\n* [<t:{timestamp}:d>] ||`{result.puzzle_solution}`||: {('X' if result.attempts == -1 else f'{result.attempts:,}')}/6"
         current += 1
 
         if limit and current >= limit:
