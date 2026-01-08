@@ -31,17 +31,21 @@ jobs:
             password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
+      - name: Lowercase Repository Name
+        id: repo
+        run: |
+          echo "name_lowercase=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
       - name: Build and Push to Docker Hub
         uses: docker/build-push-action@v6
         with:
             context: .
             file: ./Dockerfile
             push: true
-            tags: ${{ secrets.DOCKER_HUB_USERNAME }}/${{ steps.repository.outputs.lowercase }}:latest
+            tags: ${{ secrets.DOCKER_HUB_USERNAME }}/${{ steps.repository.outputs.name_lowercase }}:latest
       - name: Set Docker Hub Description
         uses: peter-evans/dockerhub-description@v5
         with:
             username: ${{ secrets.DOCKER_HUB_USERNAME }}
             password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
-            repository: ${{ secrets.DOCKER_HUB_USERNAME }}/${{ steps.repository.outputs.lowercase }}
+            repository: ${{ secrets.DOCKER_HUB_USERNAME }}/${{ steps.repository.outputs.name_lowercase }}
             short-description: ${{ github.event.repository.description }}
