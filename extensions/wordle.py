@@ -27,12 +27,16 @@ from hikari import (
     ContainerComponent,
     GuildMessageCreateEvent,
     GuildTextChannel,
+    Member,
     Message,
+    MessageReference,
     Permissions,
+    Snowflake,
     Status,
     TextDisplayComponent,
     User,
 )
+from hikari.messages import MessageReferenceType
 from httpx import AsyncClient, Response
 from loguru import logger
 from sqlmodel import func
@@ -88,6 +92,18 @@ async def command_wordle_import(
     found: int = 0
 
     for msg in msgs:
+        # Check for Forwarded Message
+        if msg.message_reference:
+            ref: MessageReference = msg.message_reference
+
+            if ref.type == MessageReferenceType.FORWARD and ref.id:
+                fwd: Message = await ctx.client.rest.fetch_message(
+                    ref.channel_id, ref.id
+                )
+
+                if await WordleOps.import_data(ctx.client, fwd, guild_id=ref.guild_id):
+                    found += 1
+
         if await WordleOps.import_data(ctx.client, msg):
             found += 1
 
@@ -238,9 +254,30 @@ async def command_wordle_leaderboard(
 @arc.message_command("Import Wordle Data")
 async def command_wordle_import_message(ctx: GatewayContext, msg: Message) -> None:
     """Handle the Import Wordle Data message command."""
-    found: WordleResult | list[WordleResult] | None = await WordleOps.import_data(
+    found: list[WordleResult] = []
+    results: WordleResult | list[WordleResult] | None = await WordleOps.import_data(
         ctx.client, msg
     )
+
+    if isinstance(results, list):
+        found.extend(results)
+    elif results:
+        found.append(results)
+
+    # Check for Forwarded Message
+    if msg.message_reference:
+        ref: MessageReference = msg.message_reference
+
+        if ref.type == MessageReferenceType.FORWARD and ref.id:
+            fwd: Message = await ctx.client.rest.fetch_message(ref.channel_id, ref.id)
+            results = await WordleOps.import_data(
+                ctx.client, fwd, guild_id=ref.guild_id
+            )
+
+            if isinstance(results, list):
+                found.extend(results)
+            elif results:
+                found.append(results)
 
     if not found:
         await ctx.respond(
@@ -468,7 +505,7 @@ class WordleOps:
 
     @staticmethod
     async def import_data(
-        client: GatewayClient, msg: Message
+        client: GatewayClient, msg: Message, *, guild_id: Snowflake | None = None
     ) -> WordleResult | list[WordleResult] | None:
         """Import Wordle data from a Discord message."""
         if not msg.author.is_bot:
@@ -494,12 +531,12 @@ class WordleOps:
             return
 
         return await WordleOps._import_streak(
-            client, msg
-        ) or await WordleOps._import_share(client, msg)
+            client, msg, guild_id=guild_id
+        ) or await WordleOps._import_share(client, msg, guild_id=guild_id)
 
     @staticmethod
     async def _import_streak(
-        client: GatewayClient, msg: Message
+        client: GatewayClient, msg: Message, *, guild_id: Snowflake | None = None
     ) -> WordleResult | list[WordleResult] | None:
         """Import Wordle data from a streak Discord message."""
         if not msg.content or not re.search(WordleOps.RGX_STREAK, msg.content):
@@ -529,30 +566,47 @@ class WordleOps:
 
             for mention in mentions:
                 user: int | str = int(mention[0]) if mention[0] else mention[1]
+                server: int | None = msg.guild_id
 
-                # Resolve User ID for display name
-                if isinstance(user, str):
-                    if msg.guild_id:
-                        for member in await client.rest.search_members(
-                            int(msg.guild_id), user
-                        ):
-                            names: list[str] = [member.username.lower()]
+                if not server and guild_id:
+                    server = int(guild_id)
 
-                            if member.global_name:
-                                names.append(member.global_name.lower())
+                if isinstance(user, int):
+                    logger.debug(f"Skipped mention {user}, not unmentioned")
+                    logger.trace(f"{mention=}")
 
-                            if member.nickname:
-                                names.append(member.nickname.lower())
+                    continue
+                elif not server:
+                    logger.debug(f"Skipped mention {user}, server is null")
+                    logger.trace(f"{mention=}\n{msg=}")
 
-                            for name in names:
-                                if name == user.lower():
-                                    user = member.id
+                    continue
 
-                                    break
+                # Resolve display name into User ID
+                members: Sequence[Member] = await client.rest.fetch_members(server)
+
+                for member in members:
+                    names: list[str] = list(
+                        dict.fromkeys(
+                            name
+                            for name in (
+                                member.username,
+                                member.global_name,
+                                member.nickname,
+                            )
+                            if name
+                        )
+                    )
+
+                    for name in names:
+                        if name == user:
+                            user = member.id
+
+                            break
 
                 if isinstance(user, str):
                     logger.error(
-                        f"Failed to determine User ID unmentioned name: {user}"
+                        f"Failed to determine User ID unmentioned name: {user} ({', '.join(names)})"
                     )
                     logger.debug(f"{mention=}\n{user=}")
 
@@ -576,7 +630,7 @@ class WordleOps:
 
     @staticmethod
     async def _import_share(
-        client: GatewayClient, msg: Message
+        client: GatewayClient, msg: Message, *, guild_id: Snowflake | None = None
     ) -> WordleResult | list[WordleResult] | None:
         """Import Wordle data from a share Discord message."""
         if not msg.components:
