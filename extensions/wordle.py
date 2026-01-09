@@ -174,8 +174,35 @@ async def command_wordle_history(
             "Number of history entries to fetch. Defaults to 10.", min=1, max=100
         ),
     ] = 10,
+    min_attempts: Option[
+        int | None,
+        IntParams(
+            "Minimum number of attempts for an entry to be included in the history.",
+            min=1,
+            max=6,
+        ),
+    ] = None,
+    max_attempts: Option[
+        int | None,
+        IntParams(
+            "Maximum number of attempts for an entry to be included in the history.",
+            min=1,
+            max=6,
+        ),
+    ] = None,
 ) -> None:
     """Handle the /wordle history command."""
+    if min_attempts and max_attempts:
+        if min_attempts > max_attempts:
+            await ctx.respond(
+                component=Templates.reply(
+                    "Minimum attempts must be less than maximum attempts.",
+                    TemplateType.ERROR,
+                )
+            )
+
+            return
+
     if not user:
         user = ctx.author
 
@@ -197,6 +224,23 @@ async def command_wordle_history(
     current: int = 0
 
     for result in results:
+        attempts: int = result.attempts
+
+        # Normalize failed attempts to 7 for filtering
+        if attempts == -1:
+            attempts = 7
+
+        if min_attempts and (attempts < min_attempts):
+            logger.debug(f"Skipped result {result.id}, attempts below minimum")
+            logger.trace(f"{result=}")
+
+            continue
+        elif max_attempts and (attempts > max_attempts):
+            logger.debug(f"Skipped result {result.id}, attempts below minimum")
+            logger.trace(f"{result=}")
+
+            continue
+
         timestamp: int = int(
             datetime(
                 result.puzzle_day.year, result.puzzle_day.month, result.puzzle_day.day
