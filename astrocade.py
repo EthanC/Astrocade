@@ -14,6 +14,7 @@ from hikari import (
     ActivityType,
     ApplicationContextType,
     GatewayBot,
+    GatewayConnectionError,
     Intents,
     Permissions,
     Status,
@@ -46,7 +47,7 @@ async def start() -> None:
 
     if log_url := env.str("LOG_DISCORD_WEBHOOK_URL", default=None):
         logger.add(
-            DiscordSink(log_url),
+            DiscordSink(log_url, suppress=[GatewayConnectionError]),
             level=env.str("LOG_DISCORD_WEBHOOK_LEVEL", default="WARNING"),
             backtrace=False,
         )
@@ -99,7 +100,9 @@ async def start() -> None:
 
     try:
         await bot.start(
-            activity=Activity(name="Pardon our space dust", type=ActivityType.WATCHING),
+            activity=Activity(
+                name="Pardon our space dust...", type=ActivityType.WATCHING
+            ),
             check_for_updates=False,
             status=Status.DO_NOT_DISTURB,
         )
