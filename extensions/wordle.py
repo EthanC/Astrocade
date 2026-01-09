@@ -490,6 +490,46 @@ class WordleOps:
         return total_attempts // len(player.wordle_results)
 
     @staticmethod
+    async def count_results(client: GatewayClient) -> int:
+        """Count the number of WordleResults in the Astrocade database."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+
+        async with AsyncSession(engine) as session:
+            statement: SelectOfScalar[int] = select(func.count()).select_from(
+                WordleResult
+            )
+
+            logger.debug("Counting WordleResults in database")
+            logger.trace(f"{statement=}\n{engine=}\n{session=}")
+
+            results: ScalarResult[int] = await session.exec(statement)
+            count: int = results.one()
+
+            logger.debug(f"Found {count} WordleResults in database")
+
+            return count
+
+    @staticmethod
+    async def count_puzzles(client: GatewayClient) -> int:
+        """Count the number of WordlePuzzles in the Astrocade database."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+
+        async with AsyncSession(engine) as session:
+            statement: SelectOfScalar[int] = select(func.count()).select_from(
+                WordlePuzzle
+            )
+
+            logger.debug("Counting WordlePuzzles in database")
+            logger.trace(f"{statement=}\n{engine=}\n{session=}")
+
+            results: ScalarResult[int] = await session.exec(statement)
+            count: int = results.one()
+
+            logger.debug(f"Found {count} WordlePuzzles in database")
+
+            return count
+
+    @staticmethod
     async def _get_puzzle_metadata(day: date) -> dict[str, Any]:
         """Fetch Wordle puzzle metadata from NYT for the given day."""
         async with AsyncClient() as client:

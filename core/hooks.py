@@ -1,5 +1,7 @@
 """Module containing lifecycle and command hooks."""
 
+from random import randint
+
 import arc
 from arc import (
     GatewayClient,
@@ -59,10 +61,22 @@ class Tasks:
     @arc.utils.interval_loop(minutes=1)
     async def presence(client: GatewayClient) -> None:
         """Set the bot status to display the latest Wordle data counts."""
+        from extensions.wordle import WordleOps
+
+        count: int = await Database.count_players(client)
+        fact: str = f"Tracking stats for {count:,} players"
+
+        match randint(1, 2):
+            case 1:
+                count = await WordleOps.count_results(client)
+                fact = f"Tracking stats for {count:,} Wordle completions"
+            case 2:
+                count = await WordleOps.count_puzzles(client)
+                fact = f"Tracking stats for {count:,} Wordle puzzles"
+            case _:
+                pass
+
         await client.app.update_presence(
             status=Status.ONLINE,
-            activity=Activity(
-                name=f"Tracking Stats for {await Database.count_players(client):,} users",
-                type=ActivityType.WATCHING,
-            ),
+            activity=Activity(name=fact, type=ActivityType.WATCHING),
         )
