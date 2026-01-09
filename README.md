@@ -9,7 +9,9 @@ Astrocade is a Discord Bot designed to expand and enhance Discord’s built-in A
 
 ## Features
 
-- [Wordle](https://discord.com/discovery/applications/1211781489931452447) stat tracking, history, and leaderboards 
+- [Wordle](https://discord.com/discovery/applications/1211781489931452447) stat tracking, history, and leaderboards.
+
+![Wordle Commands](/assets/astrocade_readme_wordle.png)
 
 ## Getting Started
 
