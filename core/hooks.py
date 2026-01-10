@@ -69,10 +69,10 @@ class Tasks:
         match randint(1, 2):
             case 1:
                 count = await WordleOps.count_results(client)
-                fact = f"Tracking stats for {count:,} Wordle completions"
+                fact = f"Tracking {count:,} Wordle completions"
             case 2:
                 count = await WordleOps.count_puzzles(client)
-                fact = f"Tracking stats for {count:,} Wordle puzzles"
+                fact = f"Tracking {count:,} Wordle puzzles"
             case _:
                 pass
 
