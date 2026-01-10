@@ -153,7 +153,7 @@ async def command_wordle_stats(
 
     stats: str = f"## Wordle Statistics for <@{player.id}>"
     stats += f"\n* **Points:** {player.wordle_points:,}"
-    stats += f"\n* **Completions:** {len(player.wordle_results):,}"
+    stats += f"\n* **Completions:** {len(player.wordle_results):,} (of {await WordleOps.count_puzzles(ctx.client):,})"
     stats += f"\n* **Average:** {await WordleOps.get_player_average(ctx.client, player.id):,}"
 
     await ctx.respond(component=Templates.reply(stats, TemplateType.SUCCESS))
