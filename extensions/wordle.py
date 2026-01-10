@@ -272,24 +272,22 @@ async def command_wordle_leaderboard(
     """Handle the /wordle leaderboard command."""
     players: list[Player] = await WordleOps.get_leaderboard(ctx.client, limit)
 
-    if len(players) == 0:
+    if not players:
         await ctx.respond(
             component=Templates.reply(
-                "No players are currently available to populate the leaderboard.",
+                "No player stats are available to populate the leaderboard.",
                 TemplateType.WARN,
             )
         )
 
         return
 
-    leaderboard: str = "## Wordle Leaderboard"
-    pos: int = 1
-
-    for player in players:
-        leaderboard += f"\n{pos}. <@{player.id}>: {player.wordle_points:,} points"
-        pos += 1
-
-    await ctx.respond(component=Templates.reply(leaderboard, TemplateType.SUCCESS))
+    await ctx.respond(
+        component=Templates.reply(
+            await WordleOps.get_leaderboard_message(players, limit),
+            TemplateType.SUCCESS,
+        )
+    )
 
 
 @plugin.include
@@ -342,7 +340,7 @@ async def command_wordle_import_message(ctx: GatewayContext, msg: Message) -> No
 @plugin.listen()
 async def event_wordle_message(event: GuildMessageCreateEvent) -> None:
     """Handle server messages upon creation."""
-    await WordleOps.import_data(plugin.client, event.message)
+    await WordleOps.import_data(plugin.client, event.message, event=True)
 
 
 @plugin.set_error_handler
@@ -477,6 +475,21 @@ class WordleOps:
             return players
 
     @staticmethod
+    async def get_leaderboard_message(players: list[Player], limit: int) -> str:
+        """Get the formatted leaderboard message for the provided players."""
+        if not players:
+            players = await WordleOps.get_leaderboard(plugin.client, limit=limit)
+
+        leaderboard: str = "## Wordle Leaderboard"
+        pos: int = 1
+
+        for player in players:
+            leaderboard += f"\n{pos}. <@{player.id}>: {player.wordle_points:,} points"
+            pos += 1
+
+        return leaderboard
+
+    @staticmethod
     async def get_player_average(client: GatewayClient, player_id: int) -> int:
         """Get the average number of attempts for a player's Wordle results."""
         engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
@@ -589,7 +602,11 @@ class WordleOps:
 
     @staticmethod
     async def import_data(
-        client: GatewayClient, msg: Message, *, guild_id: Snowflake | None = None
+        client: GatewayClient,
+        msg: Message,
+        *,
+        guild_id: Snowflake | None = None,
+        event: bool = False,
     ) -> WordleResult | list[WordleResult] | None:
         """Import Wordle data from a Discord message."""
         if not msg.author.is_bot:
@@ -615,12 +632,16 @@ class WordleOps:
             return
 
         return await WordleOps._import_streak(
-            client, msg, guild_id=guild_id
-        ) or await WordleOps._import_share(client, msg, guild_id=guild_id)
+            client, msg, guild_id=guild_id, event=event
+        ) or await WordleOps._import_share(client, msg, guild_id=guild_id, event=event)
 
     @staticmethod
     async def _import_streak(
-        client: GatewayClient, msg: Message, *, guild_id: Snowflake | None = None
+        client: GatewayClient,
+        msg: Message,
+        *,
+        guild_id: Snowflake | None = None,
+        event: bool = False,
     ) -> WordleResult | list[WordleResult] | None:
         """Import Wordle data from a streak Discord message."""
         if not msg.content or not re.search(WordleOps.RGX_STREAK, msg.content):
@@ -710,11 +731,25 @@ class WordleOps:
 
                 logger.success(f"Created placement for {user}")
 
+        if results and event:
+            await client.rest.create_message(
+                msg.channel_id,
+                component=Templates.reply(
+                    await WordleOps.get_leaderboard_message([], 10),
+                    TemplateType.SUCCESS,
+                ),
+                reply=msg.id,
+            )
+
         return results
 
     @staticmethod
     async def _import_share(
-        client: GatewayClient, msg: Message, *, guild_id: Snowflake | None = None
+        client: GatewayClient,
+        msg: Message,
+        *,
+        guild_id: Snowflake | None = None,
+        event: bool = False,
     ) -> WordleResult | list[WordleResult] | None:
         """Import Wordle data from a share Discord message."""
         if not msg.components:
