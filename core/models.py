@@ -102,7 +102,7 @@ class Player(SQLModel, table=True):
                 case 6:
                     points += env.int("WORDLE_POINTS_ATTEMPTS_6", 1)
                 case _:  # Fail
-                    points -= env.int("WORDLE_POINTS_FAIL", -5)
+                    points += env.int("WORDLE_POINTS_FAIL", -5)
 
         return points
 
