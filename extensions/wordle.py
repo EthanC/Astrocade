@@ -201,7 +201,7 @@ async def command_wordle_stats(
     aces: int = player.wordle_aces
 
     stats: str = f"## Wordle Statistics for <@{player.id}>"
-    stats += f"\n* **Points:** {player.wordle_points:,}"
+    stats += f"\n* **Points:** {player.wordle_points:,} ({player.wordle_points_gross:,} gross)"
     stats += f"\n* **Average:** {player.wordle_average_attempts:,}"
     stats += f"\n* **Completions:** {completions:,} of {total_puzzles:,} ({percentage(completions, total_puzzles)}%)"
     stats += f"\n* **Fails:** {fails:,} of {total_puzzles:,} ({percentage(fails, total_puzzles)}%) | {WordlePoints.FAIL * fails:,} points"
@@ -326,6 +326,10 @@ async def command_wordle_leaderboard(
                     value=WordleLeaderboardType.POINTS,
                 ),
                 CommandChoice(
+                    name=WordleLeaderboardType.POINTS_GROSS,
+                    value=WordleLeaderboardType.POINTS_GROSS,
+                ),
+                CommandChoice(
                     name=WordleLeaderboardType.AVERAGES,
                     value=WordleLeaderboardType.AVERAGES,
                 ),
@@ -399,6 +403,9 @@ async def command_wordle_help(ctx: GatewayContext) -> None:
                     TextDisplayComponentBuilder(content="## Wordle"),
                     TextDisplayComponentBuilder(content=stats),
                     TextDisplayComponentBuilder(content=rules),
+                    TextDisplayComponentBuilder(
+                        content="-# Made with :green_heart: by <@132693143173857281>"
+                    ),
                 ]
             ),
             MessageActionRowBuilder(
@@ -581,6 +588,11 @@ class WordleOps:
                 players = await WordleOps.get_leaderboard_points(
                     plugin.client, limit, direction
                 )
+            case WordleLeaderboardType.POINTS_GROSS:
+                title = "Wordle Gross Points Leaderboard"
+                players = await WordleOps.get_leaderboard_points_gross(
+                    plugin.client, limit, direction
+                )
             case WordleLeaderboardType.AVERAGES:
                 title = "Wordle Average Leaderboard"
                 players = await WordleOps.get_leaderboard_average(
@@ -619,6 +631,8 @@ class WordleOps:
             match category:
                 case WordleLeaderboardType.POINTS:
                     placement = f"{player.wordle_points:,} points"
+                case WordleLeaderboardType.POINTS_GROSS:
+                    placement = f"{player.wordle_points_gross:,} points"
                 case WordleLeaderboardType.AVERAGES:
                     placement = f"{player.wordle_average_attempts:,} attempts"
                 case WordleLeaderboardType.FAILS:
@@ -660,6 +674,36 @@ class WordleOps:
 
             logger.debug(
                 f"Found {len(players):,} players for Wordle points leaderboard"
+            )
+            logger.trace(f"{players=}")
+
+            return players
+
+    @staticmethod
+    async def get_leaderboard_points_gross(
+        client: GatewayClient, limit: int, direction: str
+    ) -> list[Player]:
+        """Get the top Players ordered by their grossed Wordle points."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+        players: list[Player] = []
+
+        async with AsyncSession(engine) as session:
+            statement: SelectOfScalar[Player] = (
+                select(Player)
+                .where(Player.wordle_points_gross > 0)
+                .order_by(
+                    Player.wordle_points_gross.asc()
+                    if direction == Direction.ASCENDING
+                    else Player.wordle_points_gross.desc()
+                )
+                .limit(limit)
+            )
+
+            results: ScalarResult[Player] = await session.exec(statement)
+            players = list(results.all())
+
+            logger.debug(
+                f"Found {len(players):,} players for Wordle gross points leaderboard"
             )
             logger.trace(f"{players=}")
 

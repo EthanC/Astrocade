@@ -102,7 +102,7 @@ class Player(SQLModel, table=True):
                     points += WordlePoints.ATTEMPTS_5
                 case 6:
                     points += WordlePoints.ATTEMPTS_6
-                case _:  # "X"
+                case _:  # 7 or "X"
                     points += WordlePoints.FAIL
 
         return points
@@ -121,6 +121,55 @@ class Player(SQLModel, table=True):
             },
             value=WordleResult.attempts,
             else_=WordlePoints.FAIL,
+        )
+
+        return (
+            select(func.coalesce(func.sum(points_case), 0))
+            .where(WordleResult.player_id == cls.id)
+            .scalar_subquery()
+        )
+
+    wordle_points_gross: ClassVar[int]
+    """Total Wordle points grossed by the player."""
+
+    @hybrid_property
+    def wordle_points_gross(self: Self) -> int:
+        """Return total Wordle points grossed by the player."""
+        points: int = 0
+
+        for result in self.wordle_results:
+            match result.attempts:
+                case 1:
+                    points += WordlePoints.ATTEMPTS_1
+                case 2:
+                    points += WordlePoints.ATTEMPTS_2
+                case 3:
+                    points += WordlePoints.ATTEMPTS_3
+                case 4:
+                    points += WordlePoints.ATTEMPTS_4
+                case 5:
+                    points += WordlePoints.ATTEMPTS_5
+                case 6:
+                    points += WordlePoints.ATTEMPTS_6
+                case _:  # 7 or "X"
+                    pass
+
+        return points
+
+    @wordle_points_gross.expression
+    def wordle_points_gross(cls: Self) -> ScalarSelect[int]:
+        """Compute total Wordle points grossed by the player."""
+        points_case: Case[Any] = case(
+            {
+                1: WordlePoints.ATTEMPTS_1,
+                2: WordlePoints.ATTEMPTS_2,
+                3: WordlePoints.ATTEMPTS_3,
+                4: WordlePoints.ATTEMPTS_4,
+                5: WordlePoints.ATTEMPTS_5,
+                6: WordlePoints.ATTEMPTS_6,
+            },
+            value=WordleResult.attempts,
+            else_=0,
         )
 
         return (

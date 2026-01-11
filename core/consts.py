@@ -90,6 +90,7 @@ class WordleLeaderboardType(StrEnum):
         return name.title()
 
     POINTS = auto()
+    POINTS_GROSS = "Gross Points"
     AVERAGES = auto()
     FAILS = auto()
     ACES = auto()
