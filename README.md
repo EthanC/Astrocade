@@ -15,12 +15,12 @@ Astrocade is a Discord Bot that enhances the Discord Activities experience.
 
 ## Getting Started
 
-### Docker (Recommended)
+### Quick Start: Docker (Recommended)
 
 > [!IMPORTANT]
 > [Discord API](https://discord.com/developers/) credentials for a Bot user are required.
 
-Edit the following `compose.yaml` example as needed, then run `docker compose up -d`.
+Edit and run this `compose.yaml` example with `docker compose up -d`.
 
 ```yaml
 services:
@@ -31,8 +31,8 @@ services:
       LOG_LEVEL: INFO
       LOG_DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/XXXXXXXX/XXXXXXXX
       LOG_DISCORD_WEBHOOK_LEVEL: WARNING
-      DISCORD_SERVER_IDS: 0000000000
       DISCORD_BOT_TOKEN: XXXXXXXX
+      DISCORD_SERVER_IDS: 0000000000
     volumes:
       - /path/to/database.db:/astrocade/astrocade.db
     restart: unless-stopped
@@ -49,13 +49,34 @@ Install Python and the required dependencies with [uv](https://github.com/astral
 uv sync
 ```
 
-Rename `.env.example` to `.env` and fill in the required variables.
+Rename `.env.example` to `.env` and configure your environment.
 
-Start Astrocade using uv.
+Run Astrocade with uv.
 
 ```
 uv run astrocade.py -OO
 ```
+
+### Configuration
+
+All configuration is managed through environment variables on the system hosting the Bot instance.
+
+| **Environment Variable**        | **Description**                                                                                                                         | **Default**           |
+|---------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|-----------------------|
+| `LOG_LEVEL`                     | [Loguru level](https://loguru.readthedocs.io/en/stable/api/logger.html#levels) of log events to print to the console.                   | `INFO`                |
+| `LOG_DISCORD_WEBHOOK_URL`       | Discord Webhook URL to forward log events to.                                                                                           | N/A                   |
+| `LOG_DISCORD_WEBHOOK_LEVEL`     | [Loguru level](https://loguru.readthedocs.io/en/stable/api/logger.html#levels) of log events to forward to Discord.                     | N/A                   |
+| `DATABASE_PATH`                 | Path to where the SQLite Database is stored.                                                                                            | `./astrocade.db`      |
+| `DISCORD_BOT_TOKEN` (Required)  | [Discord API](https://discord.com/developers/docs/quick-start/getting-started#fetching-your-credentials) credentials for your Bot user. | N/A                   |
+| `DISCORD_SERVER_IDS` (Required) | Comma-separated list of Discord server IDs to sync commands to.                                                                         | N/A                   |
+| `WORDLE_BOT_ID`                 | User ID of the [Wordle Discord Activity](https://discord.com/discovery/applications/1211781489931452447) Bot user.                      | `1211781489931452447` |
+| `WORDLE_POINTS_ATTEMPTS_1`      | Number of points awarded for a Wordle puzzle completion in 1 attempt.                                                                   | `10`                  |
+| `WORDLE_POINTS_ATTEMPTS_2`      | Number of points awarded for a Wordle puzzle completion in 2 attempts.                                                                  | `5`                   |
+| `WORDLE_POINTS_ATTEMPTS_3`      | Number of points awarded for a Wordle puzzle completion in 3 attempts.                                                                  | `4`                   |
+| `WORDLE_POINTS_ATTEMPTS_4`      | Number of points awarded for a Wordle puzzle completion in 4 attempts.                                                                  | `3`                   |
+| `WORDLE_POINTS_ATTEMPTS_5`      | Number of points awarded for a Wordle puzzle completion in 5 attempts.                                                                  | `2`                   |
+| `WORDLE_POINTS_ATTEMPTS_6`      | Number of points awarded for a Wordle puzzle completion in 6 attempts.                                                                  | `1`                   |
+| `WORDLE_POINTS_FAIL`            | Number of points deducted for a failed Wordle puzzle completion.                                                                        | `-5`                  |
 
 ## Disclaimer
 
