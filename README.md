@@ -5,7 +5,7 @@
 ![Docker Pulls](https://img.shields.io/docker/pulls/ethanchrisp/astrocade?label=Docker%20Pulls)
 ![Docker Image Size (tag)](https://img.shields.io/docker/image-size/ethanchrisp/astrocade/latest?label=Docker%20Image%20Size)
 
-Astrocade is a Discord Bot designed to enhances the Activities experience.
+Astrocade is a Discord Bot that enhances the Discord Activities experience.
 
 ## Features
 

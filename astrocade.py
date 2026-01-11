@@ -36,8 +36,8 @@ from core.hooks import Hooks
 
 
 async def start() -> None:
-    """Initialize the Astrocade Discord bot."""
-    logger.info("Astrocade - Discord Activity Enhancements")
+    """Initialize the Astrocade Discord Bot."""
+    logger.info("Astrocade - Discord Activities Enhancements")
     logger.info("https://github.com/EthanC/Astrocade")
 
     if LOG_LEVEL:

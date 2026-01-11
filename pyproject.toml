@@ -1,7 +1,7 @@
 [project]
 name = "astrocade"
 version = "1.0.0"
-description = "Discord that enhances the Activities experience."
+description = "Discord Bot that enhances the Discord Activities experience."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
