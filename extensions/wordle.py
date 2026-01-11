@@ -1,6 +1,7 @@
 """Extension containing Wordle commands."""
 
 import re
+from asyncio import sleep
 from datetime import date, datetime, timedelta
 from operator import pos
 from re import Match, Pattern
@@ -17,12 +18,13 @@ from arc import (
     IntParams,
     Option,
     SlashGroup,
+    StrParams,
     UserParams,
 )
-from environs import env
 from hikari import (
     Activity,
     ActivityType,
+    CommandChoice,
     CommandInteractionMetadata,
     ContainerComponent,
     GuildMessageCreateEvent,
@@ -30,17 +32,40 @@ from hikari import (
     Member,
     Message,
     MessageReference,
+    PartialChannel,
     Permissions,
     Snowflake,
+    SpacingType,
     Status,
     TextDisplayComponent,
     User,
+)
+from hikari.impl import (
+    ContainerComponentBuilder,
+    LinkButtonBuilder,
+    MediaGalleryComponentBuilder,
+    MediaGalleryItemBuilder,
+    MessageActionRowBuilder,
+    SeparatorComponentBuilder,
+    TextDisplayComponentBuilder,
 )
 from hikari.messages import MessageReferenceType
 from httpx import AsyncClient, Response
 from loguru import logger
 from sqlmodel import func
 
+from core.consts import (
+    ASTROCADE_LOGO,
+    REGEX_WORDLE_SHARE,
+    REGEX_WORDLE_STREAK,
+    REGEX_WORDLE_STREAK_ATTEMPT,
+    REGEX_WORDLE_STREAK_TAG,
+    WORDLE_BOT_ID,
+    WORDLE_ICON,
+    Direction,
+    WordleLeaderboardType,
+    WordlePoints,
+)
 from core.database import (
     AsyncEngine,
     AsyncSession,
@@ -51,7 +76,7 @@ from core.database import (
 )
 from core.hooks import Hooks
 from core.models import Player, WordlePuzzle, WordleResult
-from core.templates import Templates, TemplateType
+from core.templates import Templates, TemplateType, percentage
 
 plugin: GatewayPluginBase = GatewayPluginBase("wordle")
 group: SlashGroup = plugin.include_slash_group(
@@ -64,13 +89,17 @@ group: SlashGroup = plugin.include_slash_group(
 @arc.loader
 def ext_loader(client: GatewayClient) -> None:
     """Load this extension."""
-    logger.debug(f"Loading {plugin.name} extension...")
+    logger.debug(f"Loading the {plugin.name} extension")
     logger.trace(f"{plugin=}")
 
     try:
         client.add_plugin(plugin)
     except Exception as e:
-        logger.opt(exception=e).error(f"Failed to load {plugin.name} extension")
+        logger.opt(exception=e).error(f"Failed to load the {plugin.name} extension")
+
+        return
+
+    logger.info(f"Loaded the {plugin.name} extension")
 
 
 @group.include
@@ -83,11 +112,23 @@ def ext_loader(client: GatewayClient) -> None:
 async def command_wordle_import(
     ctx: GatewayContext,
     channel: Option[
-        GuildTextChannel,
+        GuildTextChannel | None,
         ChannelParams("Channel whose message history will be searched."),
-    ],
+    ] = None,
 ) -> None:
     """Handle the /wordle import command."""
+    if not channel:
+        cur_channel: PartialChannel = await ctx.client.rest.fetch_channel(
+            ctx.channel_id
+        )
+
+        if not isinstance(cur_channel, GuildTextChannel):
+            raise RuntimeError(
+                f"Current channel is {cur_channel}, expected GuildTextChannel"
+            )
+
+        channel = cur_channel
+
     msgs: Sequence[Message] = await ctx.client.rest.fetch_messages(channel)
     found: int = 0
 
@@ -107,19 +148,22 @@ async def command_wordle_import(
         if await WordleOps.import_data(ctx.client, msg):
             found += 1
 
+        # Avoid rate limit
+        await sleep(0.25)
+
     if not found:
         await ctx.respond(
-            component=Templates.reply(
-                "No Wordle found in the provided channel.", TemplateType.INFO
+            component=Templates.generic(
+                TemplateType.INFO, f"No Wordle data found in {len(msgs):,} messages."
             )
         )
 
         return
 
     await ctx.respond(
-        component=Templates.reply(
-            f"Imported {found:,} Wordle result(s) from {len(msgs):,} messages.",
+        component=Templates.generic(
             TemplateType.SUCCESS,
+            f"Imported {found:,} Wordle result(s) from {len(msgs):,} messages.",
         )
     )
 
@@ -144,19 +188,28 @@ async def command_wordle_stats(
 
     if not player.wordle_points:
         await ctx.respond(
-            component=Templates.reply(
-                "No Wordle statistics found for this player.", TemplateType.WARN
+            component=Templates.generic(
+                TemplateType.INFO, "No Wordle statistics found for this player."
             )
         )
 
         return
 
+    total_puzzles: int = await WordleOps.count_puzzles(ctx.client)
+    completions: int = player.wordle_completions
+    fails: int = player.wordle_fails
+    aces: int = player.wordle_aces
+
     stats: str = f"## Wordle Statistics for <@{player.id}>"
     stats += f"\n* **Points:** {player.wordle_points:,}"
-    stats += f"\n* **Completions:** {len(player.wordle_results):,} (of {await WordleOps.count_puzzles(ctx.client):,})"
-    stats += f"\n* **Average:** {await WordleOps.get_player_average(ctx.client, player.id):,}"
+    stats += f"\n* **Average:** {player.wordle_average_attempts:,}"
+    stats += f"\n* **Completions:** {completions:,} of {total_puzzles:,} ({percentage(completions, total_puzzles)}%)"
+    stats += f"\n* **Fails:** {fails:,} of {total_puzzles:,} ({percentage(fails, total_puzzles)}%) | {WordlePoints.FAIL * fails:,} points"
+    stats += f"\n* **Aces:** {aces:,} of {total_puzzles:,} ({percentage(aces, total_puzzles)}%) | {WordlePoints.ATTEMPTS_1 * aces:,} points"
 
-    await ctx.respond(component=Templates.reply(stats, TemplateType.SUCCESS))
+    await ctx.respond(
+        component=Templates.generic_thumb(TemplateType.SUCCESS, stats, WORDLE_ICON)
+    )
 
 
 @group.include
@@ -171,9 +224,9 @@ async def command_wordle_history(
     limit: Option[
         int,
         IntParams(
-            "Number of history entries to fetch. Defaults to 10.", min=1, max=100
+            "Number of history entries to fetch. Defaults to 25.", min=1, max=100
         ),
-    ] = 10,
+    ] = 25,
     min_attempts: Option[
         int | None,
         IntParams(
@@ -195,9 +248,9 @@ async def command_wordle_history(
     if min_attempts and max_attempts:
         if min_attempts > max_attempts:
             await ctx.respond(
-                component=Templates.reply(
-                    "Minimum attempts must be less than maximum attempts.",
+                component=Templates.generic(
                     TemplateType.ERROR,
+                    "Minimum attempts must be less than maximum attempts.",
                 )
             )
 
@@ -210,8 +263,8 @@ async def command_wordle_history(
 
     if not player.wordle_results:
         await ctx.respond(
-            component=Templates.reply(
-                f"Player {user.mention} has no Wordle history.", TemplateType.WARN
+            component=Templates.generic(
+                TemplateType.INFO, f"Player {user.mention} has no Wordle history."
             )
         )
 
@@ -226,10 +279,6 @@ async def command_wordle_history(
     for result in results:
         attempts: int = result.attempts
 
-        # Normalize failed attempts to 7 for filtering
-        if attempts == -1:
-            attempts = 7
-
         if min_attempts and (attempts < min_attempts):
             logger.debug(f"Skipped result {result.id}, attempts below minimum")
             logger.trace(f"{result=}")
@@ -241,18 +290,23 @@ async def command_wordle_history(
 
             continue
 
-        timestamp: int = int(
-            datetime(
-                result.puzzle_day.year, result.puzzle_day.month, result.puzzle_day.day
-            ).timestamp()
+        puzzle_id: int = result.puzzle_id
+        solution: str = result.puzzle_solution
+        score: str = "X" if attempts == 7 else f"{attempts:,}"
+        points: int = await WordleOps.get_points(attempts)
+
+        history += (
+            f"\n`{puzzle_id}` ||`{solution}`||: **{score}**/6 ({points:,} points)"
         )
-        history += f"\n* [<t:{timestamp}:d>] ||`{result.puzzle_solution}`||: {('X' if result.attempts == -1 else f'{result.attempts:,}')}/6"
+
         current += 1
 
         if limit and current >= limit:
             break
 
-    await ctx.respond(component=Templates.reply(history, TemplateType.SUCCESS))
+    await ctx.respond(
+        component=Templates.generic_thumb(TemplateType.SUCCESS, history, WORDLE_ICON)
+    )
 
 
 @group.include
@@ -262,31 +316,99 @@ async def command_wordle_history(
 )
 async def command_wordle_leaderboard(
     ctx: GatewayContext,
+    category: Option[
+        str,
+        StrParams(
+            f"Statistic of the leaderboard. Default is {WordleLeaderboardType.POINTS}.",
+            choices=[
+                CommandChoice(
+                    name=WordleLeaderboardType.POINTS,
+                    value=WordleLeaderboardType.POINTS,
+                ),
+                CommandChoice(
+                    name=WordleLeaderboardType.AVERAGES,
+                    value=WordleLeaderboardType.AVERAGES,
+                ),
+                CommandChoice(
+                    name=WordleLeaderboardType.FAILS, value=WordleLeaderboardType.FAILS
+                ),
+                CommandChoice(
+                    name=WordleLeaderboardType.ACES, value=WordleLeaderboardType.ACES
+                ),
+                CommandChoice(
+                    name=WordleLeaderboardType.COMPLETIONS,
+                    value=WordleLeaderboardType.COMPLETIONS,
+                ),
+            ],
+        ),
+    ] = WordleLeaderboardType.POINTS,
     limit: Option[
         int,
         IntParams(
             "Number of leaderboard entries to fetch. Defaults to 10.", min=1, max=100
         ),
     ] = 10,
+    direction: Option[
+        str,
+        StrParams(
+            f"Sort order of the leaderboard. Default is {Direction.DESCENDING}.",
+            choices=[
+                CommandChoice(name=Direction.ASCENDING, value=Direction.ASCENDING),
+                CommandChoice(name=Direction.DESCENDING, value=Direction.DESCENDING),
+            ],
+        ),
+    ] = Direction.DESCENDING,
 ) -> None:
     """Handle the /wordle leaderboard command."""
-    players: list[Player] = await WordleOps.get_leaderboard(ctx.client, limit)
-
-    if not players:
-        await ctx.respond(
-            component=Templates.reply(
-                "No player stats are available to populate the leaderboard.",
-                TemplateType.WARN,
-            )
+    await ctx.respond(
+        component=await WordleOps.get_leaderboard_message(
+            WordleLeaderboardType(category), limit, direction
         )
+    )
 
-        return
+
+@group.include
+@arc.with_hook(Hooks.command_use)
+@arc.slash_subcommand(
+    "help", "Display the Wordle statistics and ruleset for this Astrocade instance."
+)
+async def command_wordle_help(ctx: GatewayContext) -> None:
+    """Handle the /wordle help command."""
+    players: int = await Database.count_players(ctx.client)
+    puzzles: int = await WordleOps.count_puzzles(ctx.client)
+    completions: int = await WordleOps.count_results(ctx.client)
+
+    stats: str = f"-# Tracking **{players:,}** players over **{puzzles:,}** puzzles with **{completions:,}** completions.\n"
+
+    rules: str = f"1 Attempt: **{WordlePoints.ATTEMPTS_1:,}** points"
+    rules += f"\n2 Attempts: **{WordlePoints.ATTEMPTS_2:,}** points"
+    rules += f"\n3 Attempts: **{WordlePoints.ATTEMPTS_3:,}** points"
+    rules += f"\n4 Attempts: **{WordlePoints.ATTEMPTS_4:,}** points"
+    rules += f"\n5 Attempts: **{WordlePoints.ATTEMPTS_5:,}** points"
+    rules += f"\n6 Attempts: **{WordlePoints.ATTEMPTS_6:,}** points"
+    rules += f"\nFail: **{WordlePoints.FAIL:,}** points"
 
     await ctx.respond(
-        component=Templates.reply(
-            await WordleOps.get_leaderboard_message(players, limit),
-            TemplateType.SUCCESS,
-        )
+        components=[
+            ContainerComponentBuilder(
+                components=[
+                    MediaGalleryComponentBuilder(
+                        items=[MediaGalleryItemBuilder(media=ASTROCADE_LOGO)]
+                    ),
+                    SeparatorComponentBuilder(spacing=SpacingType.LARGE, divider=True),
+                    TextDisplayComponentBuilder(content="## Wordle"),
+                    TextDisplayComponentBuilder(content=stats),
+                    TextDisplayComponentBuilder(content=rules),
+                ]
+            ),
+            MessageActionRowBuilder(
+                components=[
+                    LinkButtonBuilder(
+                        label="GitHub", url="https://github.com/EthanC/Astrocade"
+                    )
+                ]
+            ),
+        ]
     )
 
 
@@ -323,16 +445,16 @@ async def command_wordle_import_message(ctx: GatewayContext, msg: Message) -> No
 
     if not found:
         await ctx.respond(
-            component=Templates.reply(
-                "No valid Wordle data found in the provided message.", TemplateType.INFO
+            component=Templates.generic(
+                TemplateType.INFO, "No valid Wordle data found in the provided message."
             )
         )
 
         return
 
     await ctx.respond(
-        component=Templates.reply(
-            "Imported Wordle result from the provided message.", TemplateType.SUCCESS
+        component=Templates.generic(
+            TemplateType.SUCCESS, "Imported Wordle result(s) from the provided message."
         )
     )
 
@@ -351,13 +473,6 @@ async def error_handler(ctx: GatewayContext, error: Exception) -> None:
 
 class WordleOps:
     """Operations for the Wordle commands."""
-
-    RGX_STREAK: Final[Pattern[str]] = re.compile(
-        r"Your\s+group\s+is\s+on\s+a\s+(\d+)\s+day\s+streak"
-    )
-    RGX_STREAK_ATTEMPT: Final[Pattern[str]] = re.compile(r"([a-zA-Z0-9]+)/\d+:")
-    RGX_STREAK_USER: Final[Pattern[str]] = re.compile(r"<@(\w+)>|@(\w+)")
-    RGX_SHARE: Final[Pattern[str]] = re.compile(r"Wordle\s+(\d+)\s+([0-6X])/6")
 
     @staticmethod
     async def get_result(
@@ -453,7 +568,77 @@ class WordleOps:
             return puzzle
 
     @staticmethod
-    async def get_leaderboard(client: GatewayClient, limit: int) -> list[Player]:
+    async def get_leaderboard_message(
+        category: WordleLeaderboardType, limit: int, direction: str
+    ) -> ContainerComponentBuilder:
+        """Get the formatted leaderboard message for the provided players."""
+        players: list[Player] = []
+        title: str = "Wordle Leaderboard"
+
+        match category:
+            case WordleLeaderboardType.POINTS:
+                title = "Wordle Points Leaderboard"
+                players = await WordleOps.get_leaderboard_points(
+                    plugin.client, limit, direction
+                )
+            case WordleLeaderboardType.AVERAGES:
+                title = "Wordle Average Leaderboard"
+                players = await WordleOps.get_leaderboard_average(
+                    plugin.client, limit, direction
+                )
+            case WordleLeaderboardType.FAILS:
+                title = "Wordle Loserboard"
+                players = await WordleOps.get_leaderboard_fails(
+                    plugin.client, limit, direction
+                )
+            case WordleLeaderboardType.ACES:
+                title = "Wordle Aces Leaderboard"
+                players = await WordleOps.get_leaderboard_aces(
+                    plugin.client, limit, direction
+                )
+            case WordleLeaderboardType.COMPLETIONS:
+                title = "Wordle Completions Leaderboard"
+                players = await WordleOps.get_leaderboard_completions(
+                    plugin.client, limit, direction
+                )
+            case _:
+                raise RuntimeError(f"Unexpected leaderboard category {category}")
+
+        if not players:
+            return Templates.generic(
+                TemplateType.INFO,
+                f"Not enough player data available to populate the leaderboard.",
+            )
+
+        board: str = f"## {title}"
+        pos: int = 1
+
+        for player in players:
+            placement: str = f"???"
+
+            match category:
+                case WordleLeaderboardType.POINTS:
+                    placement = f"{player.wordle_points:,} points"
+                case WordleLeaderboardType.AVERAGES:
+                    placement = f"{player.wordle_average_attempts:,} attempts"
+                case WordleLeaderboardType.FAILS:
+                    placement = f"{player.wordle_fails:,} fails"
+                case WordleLeaderboardType.ACES:
+                    placement = f"{player.wordle_aces:,} aces"
+                case WordleLeaderboardType.COMPLETIONS:
+                    placement = f"{player.wordle_completions:,} completions"
+                case _:
+                    raise RuntimeError(f"Unexpected leaderboard category {category}")
+
+            board += f"\n{pos}. <@{player.id}>: {placement}"
+            pos += 1
+
+        return Templates.generic_thumb(TemplateType.SUCCESS, board, WORDLE_ICON)
+
+    @staticmethod
+    async def get_leaderboard_points(
+        client: GatewayClient, limit: int, direction: str
+    ) -> list[Player]:
         """Get the top Players ordered by their accumulated Wordle points."""
         engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
         players: list[Player] = []
@@ -462,45 +647,139 @@ class WordleOps:
             statement: SelectOfScalar[Player] = (
                 select(Player)
                 .where(Player.wordle_points > 0)
-                .order_by(Player.wordle_points.desc())
+                .order_by(
+                    Player.wordle_points.asc()
+                    if direction == Direction.ASCENDING
+                    else Player.wordle_points.desc()
+                )
                 .limit(limit)
             )
 
             results: ScalarResult[Player] = await session.exec(statement)
             players = list(results.all())
 
-            logger.debug(f"Found {len(players):,} players for Wordle Leaderboard")
+            logger.debug(
+                f"Found {len(players):,} players for Wordle points leaderboard"
+            )
             logger.trace(f"{players=}")
 
             return players
 
     @staticmethod
-    async def get_leaderboard_message(players: list[Player], limit: int) -> str:
-        """Get the formatted leaderboard message for the provided players."""
-        if not players:
-            players = await WordleOps.get_leaderboard(plugin.client, limit=limit)
+    async def get_leaderboard_average(
+        client: GatewayClient, limit: int, direction: str
+    ) -> list[Player]:
+        """Get the top Players ordered by their Wordle average attempts."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+        players: list[Player] = []
 
-        leaderboard: str = "## Wordle Leaderboard"
-        pos: int = 1
+        async with AsyncSession(engine) as session:
+            statement: SelectOfScalar[Player] = (
+                select(Player)
+                .where(Player.wordle_average_attempts > 0)
+                .order_by(
+                    Player.wordle_average_attempts.asc()
+                    if direction == Direction.ASCENDING
+                    else Player.wordle_average_attempts.desc()
+                )
+                .limit(limit)
+            )
 
-        for player in players:
-            leaderboard += f"\n{pos}. <@{player.id}>: {player.wordle_points:,} points"
-            pos += 1
+            results: ScalarResult[Player] = await session.exec(statement)
+            players = list(results.all())
 
-        return leaderboard
+            logger.debug(
+                f"Found {len(players):,} players for Wordle average attempts leaderboard"
+            )
+            logger.trace(f"{players=}")
+
+            return players
 
     @staticmethod
-    async def get_player_average(client: GatewayClient, player_id: int) -> int:
-        """Get the average number of attempts for a player's Wordle results."""
+    async def get_leaderboard_fails(
+        client: GatewayClient, limit: int, direction: str
+    ) -> list[Player]:
+        """Get the top Players ordered by their accumulated Wordle fails."""
         engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
-        player: Player = await Database.get_player(client, player_id)
+        players: list[Player] = []
 
-        if not player.wordle_results:
-            return 0
+        async with AsyncSession(engine) as session:
+            statement: SelectOfScalar[Player] = (
+                select(Player)
+                .where(Player.wordle_fails > 0)
+                .order_by(
+                    Player.wordle_fails.asc()
+                    if direction == Direction.ASCENDING
+                    else Player.wordle_fails.desc()
+                )
+                .limit(limit)
+            )
 
-        total_attempts: int = sum(result.attempts for result in player.wordle_results)
+            results: ScalarResult[Player] = await session.exec(statement)
+            players = list(results.all())
 
-        return total_attempts // len(player.wordle_results)
+            logger.debug(f"Found {len(players):,} players for Wordle fails leaderboard")
+            logger.trace(f"{players=}")
+
+            return players
+
+    @staticmethod
+    async def get_leaderboard_aces(
+        client: GatewayClient, limit: int, direction: str
+    ) -> list[Player]:
+        """Get the top Players ordered by their accumulated Wordle aces."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+        players: list[Player] = []
+
+        async with AsyncSession(engine) as session:
+            statement: SelectOfScalar[Player] = (
+                select(Player)
+                .where(Player.wordle_aces > 0)
+                .order_by(
+                    Player.wordle_aces.asc()
+                    if direction == Direction.ASCENDING
+                    else Player.wordle_aces.desc()
+                )
+                .limit(limit)
+            )
+
+            results: ScalarResult[Player] = await session.exec(statement)
+            players = list(results.all())
+
+            logger.debug(f"Found {len(players):,} players for Wordle aces leaderboard")
+            logger.trace(f"{players=}")
+
+            return players
+
+    @staticmethod
+    async def get_leaderboard_completions(
+        client: GatewayClient, limit: int, direction: str
+    ) -> list[Player]:
+        """Get the top Players ordered by their accumulated Wordle completions."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+        players: list[Player] = []
+
+        async with AsyncSession(engine) as session:
+            statement: SelectOfScalar[Player] = (
+                select(Player)
+                .where(Player.wordle_completions > 0)
+                .order_by(
+                    Player.wordle_completions.asc()
+                    if direction == Direction.ASCENDING
+                    else Player.wordle_completions.desc()
+                )
+                .limit(limit)
+            )
+
+            results: ScalarResult[Player] = await session.exec(statement)
+            players = list(results.all())
+
+            logger.debug(
+                f"Found {len(players):,} players for Wordle completions leaderboard"
+            )
+            logger.trace(f"{players=}")
+
+            return players
 
     @staticmethod
     async def count_results(client: GatewayClient) -> int:
@@ -601,6 +880,25 @@ class WordleOps:
         raise RuntimeError(f"Failed to determine Wordle puzzle solution for {day=}")
 
     @staticmethod
+    async def get_points(attempts: int) -> int:
+        """Return the points value for a given number of attempts."""
+        match attempts:
+            case 1:
+                return WordlePoints.ATTEMPTS_1
+            case 2:
+                return WordlePoints.ATTEMPTS_2
+            case 3:
+                return WordlePoints.ATTEMPTS_3
+            case 4:
+                return WordlePoints.ATTEMPTS_4
+            case 5:
+                return WordlePoints.ATTEMPTS_5
+            case 6:
+                return WordlePoints.ATTEMPTS_6
+            case _:  # "X"
+                return WordlePoints.FAIL
+
+    @staticmethod
     async def import_data(
         client: GatewayClient,
         msg: Message,
@@ -616,7 +914,7 @@ class WordleOps:
             logger.trace(f"{msg=}")
 
             return
-        elif msg.author.id != env.int("DISCORD_WORDLE_BOT_ID"):
+        elif msg.author.id != WORDLE_BOT_ID:
             logger.debug(
                 f"Skipped message {msg.id} by {msg.author.id}, author is not Wordle"
             )
@@ -644,16 +942,21 @@ class WordleOps:
         event: bool = False,
     ) -> WordleResult | list[WordleResult] | None:
         """Import Wordle data from a streak Discord message."""
-        if not msg.content or not re.search(WordleOps.RGX_STREAK, msg.content):
+        if not msg.content or not re.search(REGEX_WORDLE_STREAK, msg.content):
             logger.debug(f"Skipped message {msg.id} by {msg.author.id}, not a streak")
             logger.trace(f"{msg=}")
 
             return
 
+        server: int | None = msg.guild_id
+
+        if not server and guild_id:
+            server = int(guild_id)
+
         results: list[WordleResult] = []
 
         for line in msg.content.splitlines():
-            attempt: Match[str] | None = re.search(WordleOps.RGX_STREAK_ATTEMPT, line)
+            attempt: Match[str] | None = re.search(REGEX_WORDLE_STREAK_ATTEMPT, line)
 
             if not attempt:
                 logger.debug(
@@ -665,55 +968,46 @@ class WordleOps:
 
             day: date = msg.created_at.date() - timedelta(days=1)  # Yesterday
             attempts: int = (
-                -1 if (attempts_raw := attempt.group(1)) == "X" else int(attempts_raw)
+                7 if (attempts_raw := attempt.group(1)) == "X" else int(attempts_raw)
             )
-            mentions: list[Any] = re.findall(WordleOps.RGX_STREAK_USER, line)
+            tags: list[Any] = re.findall(REGEX_WORDLE_STREAK_TAG, line)
 
-            for mention in mentions:
-                user: int | str = int(mention[0]) if mention[0] else mention[1]
-                server: int | None = msg.guild_id
+            for tag in tags:
+                user: int | str = int(tag[0]) if tag[0] else tag[1]
 
-                if not server and guild_id:
-                    server = int(guild_id)
+                # Attempt to resolve name to ID
+                if isinstance(user, str):
+                    if not server:
+                        logger.error(f"Cannot resolve tag {user}, server is null")
+                        logger.debug(f"{tag=}\n{msg=}")
 
-                if isinstance(user, int):
-                    logger.debug(f"Skipped mention {user}, not unmentioned")
-                    logger.trace(f"{mention=}")
+                        continue
 
-                    continue
-                elif not server:
-                    logger.debug(f"Skipped mention {user}, server is null")
-                    logger.trace(f"{mention=}\n{msg=}")
+                    members: Sequence[Member] = await client.rest.fetch_members(server)
 
-                    continue
-
-                # Resolve display name into User ID
-                members: Sequence[Member] = await client.rest.fetch_members(server)
-
-                for member in members:
-                    names: list[str] = list(
-                        dict.fromkeys(
-                            name
-                            for name in (
-                                member.username,
-                                member.global_name,
-                                member.nickname,
+                    for member in members:
+                        names: list[str] = list(
+                            dict.fromkeys(
+                                name
+                                for name in (
+                                    member.username,
+                                    member.global_name,
+                                    member.nickname,
+                                )
+                                if name
                             )
-                            if name
                         )
-                    )
 
-                    for name in names:
-                        if name == user:
-                            user = member.id
+                        for name in names:
+                            if name == user:
+                                user = member.id
 
-                            break
+                                # Exit members loop
+                                break
 
                 if isinstance(user, str):
-                    logger.error(
-                        f"Failed to determine User ID unmentioned name: {user} ({', '.join(names)})"
-                    )
-                    logger.debug(f"{mention=}\n{user=}")
+                    logger.error(f"Failed to resolve tag {user} ({', '.join(names)})")
+                    logger.debug(f"{tag=}")
 
                     continue
 
@@ -729,14 +1023,14 @@ class WordleOps:
                 if result:
                     results.append(result)
 
-                logger.success(f"Created placement for {user}")
+                    logger.success(f"Created placement for {user}")
+                    logger.debug(f"{result=}")
 
         if results and event:
             await client.rest.create_message(
                 msg.channel_id,
-                component=Templates.reply(
-                    await WordleOps.get_leaderboard_message([], 10),
-                    TemplateType.SUCCESS,
+                component=await WordleOps.get_leaderboard_message(
+                    WordleLeaderboardType.POINTS, 10, Direction.DESCENDING
                 ),
                 reply=msg.id,
             )
@@ -792,7 +1086,7 @@ class WordleOps:
 
             return
 
-        match: Match[str] | None = re.search(WordleOps.RGX_SHARE, text.content)
+        match: Match[str] | None = re.search(REGEX_WORDLE_SHARE, text.content)
 
         if not match:
             logger.debug(
@@ -804,7 +1098,7 @@ class WordleOps:
 
         puzzle_id: int = int(match.group(1))
         attempts: int = (
-            -1 if (attempts_raw := match.group(2)) == "X" else int(attempts_raw)
+            7 if (attempts_raw := match.group(2)) == "X" else int(attempts_raw)
         )
         user: int | None = None
 

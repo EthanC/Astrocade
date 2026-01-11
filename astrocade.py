@@ -8,7 +8,6 @@ from sys import stdout
 from typing import Final
 
 from arc import GatewayClient
-from environs import env
 from hikari import (
     Activity,
     ActivityType,
@@ -23,36 +22,42 @@ from loguru import logger
 from loguru_discord import DiscordSink
 from loguru_discord.intercept import Intercept
 
+from core.consts import (
+    DATABASE_PATH,
+    DISCORD_BOT_TOKEN,
+    DISCORD_SERVER_IDS,
+    IS_DEBUG,
+    LOG_DISCORD_WEBHOOK_LEVEL,
+    LOG_DISCORD_WEBHOOK_URL,
+    LOG_LEVEL,
+)
 from core.database import AsyncEngine, Database
 from core.hooks import Hooks
 
 
 async def start() -> None:
     """Initialize the Astrocade Discord bot."""
-    logger.info("Astrocade")
+    logger.info("Astrocade - Discord Activity Enhancements")
     logger.info("https://github.com/EthanC/Astrocade")
 
-    if env.read_env(recurse=False):
-        logger.success("Loaded environment variables")
-
-    if log_level := env.str("LOG_LEVEL", default=None):
+    if LOG_LEVEL:
         logger.remove()
-        logger.add(stdout, level=log_level)
+        logger.add(stdout, level=LOG_LEVEL)
 
-        logger.success(f"Set console logging level to {log_level}")
-
-    is_debug: Final[bool] = log_level in {"DEBUG", "TRACE"}
+        logger.success(f"Set console logging level to {LOG_LEVEL}")
 
     Intercept.setup({"TRACE_HIKARI": "TRACE"})
 
-    if log_url := env.str("LOG_DISCORD_WEBHOOK_URL", default=None):
+    if LOG_DISCORD_WEBHOOK_URL:
         logger.add(
-            DiscordSink(log_url, suppress=[GatewayConnectionError]),
-            level=env.str("LOG_DISCORD_WEBHOOK_LEVEL", default="WARNING"),
+            DiscordSink(LOG_DISCORD_WEBHOOK_URL, suppress=[GatewayConnectionError]),
+            level=LOG_DISCORD_WEBHOOK_LEVEL,
             backtrace=False,
         )
 
-        logger.success("Enabled logging to Discord webhook")
+        logger.success(
+            f"Enabled logging to Discord webhook at level {LOG_DISCORD_WEBHOOK_LEVEL}"
+        )
 
     # Replace default asyncio event loop with libuv on UNIX
     # https://github.com/hikari-py/hikari#uvloop
@@ -66,23 +71,19 @@ async def start() -> None:
         except Exception as e:
             logger.opt(exception=e).debug("Defaulted to asyncio event loop")
 
-    database: AsyncEngine = await Database.setup(
-        env.path("DATABASE_PATH", default=Path("./astrocade.db"))
-    )
+    database: AsyncEngine = await Database.setup(DATABASE_PATH)
     bot: GatewayBot = GatewayBot(
-        env.str("DISCORD_BOT_TOKEN"),
+        DISCORD_BOT_TOKEN,
         allow_color=False,
         banner=None,
-        suppress_optimization_warning=is_debug,
+        suppress_optimization_warning=IS_DEBUG,
         intents=Intents.GUILD_MESSAGES
         | Intents.MESSAGE_CONTENT
         | Intents.GUILD_PRESENCES,
     )
     client: GatewayClient = GatewayClient(
         bot,
-        default_enabled_guilds=env.list(
-            "DISCORD_GUILD_IDS", default=[], subcast=int, delimiter=","
-        ),
+        default_enabled_guilds=DISCORD_SERVER_IDS,
         default_permissions=Permissions.VIEW_CHANNEL
         | Permissions.READ_MESSAGE_HISTORY
         | Permissions.SEND_MESSAGES,
@@ -91,7 +92,6 @@ async def start() -> None:
 
     client.set_type_dependency(AsyncEngine, database)
     client.set_type_dependency(GatewayBot, bot)
-    client.set_type_dependency(GatewayClient, client)
 
     client.load_extensions_from("extensions")
 
@@ -101,7 +101,9 @@ async def start() -> None:
     try:
         await bot.start(
             activity=Activity(
-                name="Pardon our space dust...", type=ActivityType.WATCHING
+                # Later overriden by recurring presence task
+                name="Pardon our space dust...",
+                type=ActivityType.WATCHING,
             ),
             check_for_updates=False,
             status=Status.DO_NOT_DISTURB,
@@ -115,6 +117,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(start())
     except KeyboardInterrupt:
-        pass
+        logger.debug("Exiting due to keyboard interrupt")
     except Exception as e:
         logger.opt(exception=e).critical("Fatal error occurred during runtime")

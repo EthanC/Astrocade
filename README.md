@@ -5,7 +5,7 @@
 ![Docker Pulls](https://img.shields.io/docker/pulls/ethanchrisp/astrocade?label=Docker%20Pulls)
 ![Docker Image Size (tag)](https://img.shields.io/docker/image-size/ethanchrisp/astrocade/latest?label=Docker%20Image%20Size)
 
-Astrocade is a Discord Bot designed to expand and enhance Discord’s built-in Activities and Games.
+Astrocade is a Discord Bot designed to enhances the Activities experience.
 
 ## Features
 
@@ -31,9 +31,8 @@ services:
       LOG_LEVEL: INFO
       LOG_DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/XXXXXXXX/XXXXXXXX
       LOG_DISCORD_WEBHOOK_LEVEL: WARNING
-      DISCORD_GUILD_IDS: 0000000000
+      DISCORD_SERVER_IDS: 0000000000
       DISCORD_BOT_TOKEN: XXXXXXXX
-      DISCORD_WORDLE_BOT_ID: 0000000000
     volumes:
       - /path/to/database.db:/astrocade/astrocade.db
     restart: unless-stopped
@@ -41,7 +40,7 @@ services:
 
 ### Standalone
 
-> [!IMPORTANT]
+> [!NOTE]
 > Astrocade targets Python 3.14 and newer. Compatibility with earlier versions is not guaranteed.
 
 Install Python and the required dependencies with [uv](https://github.com/astral-sh/uv):

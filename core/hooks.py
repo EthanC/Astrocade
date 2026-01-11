@@ -39,8 +39,8 @@ class Hooks:
         """Handle uncaught command exceptions."""
         if isinstance(error, (NotOwnerError, InvokerMissingPermissionsError)):
             await ctx.respond(
-                component=Templates.reply(
-                    "You don't have permission to use this command.", TemplateType.ERROR
+                component=Templates.generic(
+                    TemplateType.ERROR, "You don't have permission to use this command."
                 )
             )
 
@@ -49,8 +49,8 @@ class Hooks:
         logger.opt(exception=error).error("An unexpected error occurred in command")
 
         await ctx.respond(
-            component=Templates.reply(
-                "An unexpected error occurred. Try again later.", TemplateType.ERROR
+            component=Templates.generic(
+                TemplateType.ERROR, "An unexpected error occurred. Try again later."
             )
         )
 
