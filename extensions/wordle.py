@@ -296,7 +296,7 @@ async def command_wordle_history(
         points: int = await WordleOps.get_points(attempts)
 
         history += (
-            f"\n`{puzzle_id}` ||`{solution}`||: **{score}**/6 ({points:,} points)"
+            f"\n* `{puzzle_id}` ||`{solution}`||: **{score}**/6 ({points:,} points)"
         )
 
         current += 1
