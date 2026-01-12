@@ -56,6 +56,7 @@ from sqlmodel import func
 
 from core.consts import (
     ASTROCADE_LOGO,
+    DICTIONARY_API_KEY,
     REGEX_WORDLE_SHARE,
     REGEX_WORDLE_STREAK,
     REGEX_WORDLE_STREAK_ATTEMPT,
@@ -201,11 +202,11 @@ async def command_wordle_stats(
     aces: int = player.wordle_aces
 
     stats: str = f"## Wordle Statistics for <@{player.id}>"
-    stats += f"\n* **Points:** {player.wordle_points:,} ({player.wordle_points_gross:,} gross)"
-    stats += f"\n* **Average:** {player.wordle_average_attempts:,}"
-    stats += f"\n* **Completions:** {completions:,} of {total_puzzles:,} ({percentage(completions, total_puzzles)}%)"
-    stats += f"\n* **Fails:** {fails:,} of {total_puzzles:,} ({percentage(fails, total_puzzles)}%) | {WordlePoints.FAIL * fails:,} points"
-    stats += f"\n* **Aces:** {aces:,} of {total_puzzles:,} ({percentage(aces, total_puzzles)}%) | {WordlePoints.ATTEMPTS_1 * aces:,} points"
+    stats += f"\n* Points: **{player.wordle_points:,}** ({player.wordle_points_gross:,} gross)"
+    stats += f"\n* Average: **{player.wordle_average_attempts:,}**"
+    stats += f"\n* Completions: **{completions:,}** of {total_puzzles:,} ({percentage(completions, total_puzzles):,}%)"
+    stats += f"\n* Fails: **{fails:,}** of {total_puzzles:,} ({percentage(fails, total_puzzles):,}%) | {WordlePoints.FAIL * fails:,} points"
+    stats += f"\n* Aces: **{aces:,}** of {total_puzzles:,} ({percentage(aces, total_puzzles):,}%) | {WordlePoints.ATTEMPTS_1 * aces:,} points"
 
     await ctx.respond(
         component=Templates.generic_thumb(TemplateType.SUCCESS, stats, WORDLE_ICON)
@@ -296,7 +297,7 @@ async def command_wordle_history(
         points: int = await WordleOps.get_points(attempts)
 
         history += (
-            f"\n* `{puzzle_id}` ||`{solution}`||: **{score}**/6 ({points:,} points)"
+            f"\n* `{puzzle_id}` ||**`{solution}`**||: **{score}**/6 ({points:,} points)"
         )
 
         current += 1
@@ -416,6 +417,64 @@ async def command_wordle_help(ctx: GatewayContext) -> None:
                 ]
             ),
         ]
+    )
+
+
+@group.include
+@arc.with_hook(Hooks.command_use)
+@arc.slash_subcommand("puzzle", "Get details of a specific Wordle puzzle.")
+async def command_wordle_puzzle(
+    ctx: GatewayContext,
+    id: Option[
+        int,
+        IntParams(
+            "Unique identifier of the puzzle, represented by the number of days since Wordle began.",
+            min=1,
+        ),
+    ],
+) -> None:
+    """Handle the /wordle puzzle command."""
+    puzzle: WordlePuzzle | None = await WordleOps.get_puzzle(
+        ctx.client, id, None, skip_create=True
+    )
+
+    if not puzzle:
+        await ctx.respond(
+            component=Templates.generic(
+                TemplateType.INFO,
+                f"Wordle Puzzle `{id}` does not yet exist. Try again later.",
+            )
+        )
+
+        return
+
+    definition: str | None = await WordleOps.get_definition(puzzle.solution)
+    total_players: int = await Database.count_players(ctx.client)
+
+    details: str = f"## Wordle Puzzle `{puzzle.id}`"
+    details += f"\n### Solution: ||`{puzzle.solution}`||"
+
+    if definition:
+        details += f"\n> ||{definition}||"
+
+    details += f"\n* Completions: **{len(puzzle.results):,}** ({percentage(len(puzzle.results), total_players):,}%)"
+    details += f"\n* Fails: **{puzzle.fails:,}** ({percentage(puzzle.fails, total_players):,}%)"
+    details += (
+        f"\n* Aces: **{puzzle.aces:,}** ({percentage(puzzle.aces, total_players):,}%)"
+    )
+    details += f"\n* Average Attempts: **{puzzle.average_attempts:,}**"
+    details += "\n### Attempts Recap"
+
+    recap: dict[int, list[str]] = {1: [], 2: [], 3: [], 4: [], 5: [], 6: [], 7: []}
+
+    for result in puzzle.results:
+        recap[result.attempts].append(f"<@{result.player_id}>")
+
+    for tier in recap:
+        details += f"\n*{' :crown: ' if tier == 1 else ' '}**{'X' if tier == 7 else tier}**/6: {', '.join(recap[tier]) if recap[tier] else '--'}"
+
+    await ctx.respond(
+        component=Templates.generic_thumb(TemplateType.SUCCESS, details, WORDLE_ICON)
     )
 
 
@@ -543,7 +602,9 @@ class WordleOps:
             return result
 
     @staticmethod
-    async def get_puzzle(client: GatewayClient, id: int, day: date) -> WordlePuzzle:
+    async def get_puzzle(
+        client: GatewayClient, id: int, day: date | None, *, skip_create: bool = False
+    ) -> WordlePuzzle | None:
         """Get a WordlePuzzle for the given ID or day from the database. Create it if it doesn't exist."""
         engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
 
@@ -559,6 +620,15 @@ class WordleOps:
             puzzle: WordlePuzzle | None = results.first()
 
             if not puzzle:
+                if skip_create:
+                    logger.debug(f"Skipped Wordle puzzle creation for ID {id}")
+
+                    return
+                elif not day:
+                    raise RuntimeError(
+                        "Attempted to create a Wordle puzzle without a day"
+                    )
+
                 day: date = await WordleOps.get_puzzle_day(id, day)
                 solution: str = await WordleOps.get_puzzle_solution(day)
                 puzzle = WordlePuzzle(id=id, day=day, solution=solution)
@@ -630,17 +700,17 @@ class WordleOps:
 
             match category:
                 case WordleLeaderboardType.POINTS:
-                    placement = f"{player.wordle_points:,} points"
+                    placement = f"**{player.wordle_points:,}** points"
                 case WordleLeaderboardType.POINTS_GROSS:
-                    placement = f"{player.wordle_points_gross:,} points"
+                    placement = f"**{player.wordle_points_gross:,}** points"
                 case WordleLeaderboardType.AVERAGES:
-                    placement = f"{player.wordle_average_attempts:,} attempts"
+                    placement = f"**{player.wordle_average_attempts:,}** attempts"
                 case WordleLeaderboardType.FAILS:
-                    placement = f"{player.wordle_fails:,} fails"
+                    placement = f"**{player.wordle_fails:,}** fails"
                 case WordleLeaderboardType.ACES:
-                    placement = f"{player.wordle_aces:,} aces"
+                    placement = f"**{player.wordle_aces:,}** aces"
                 case WordleLeaderboardType.COMPLETIONS:
-                    placement = f"{player.wordle_completions:,} completions"
+                    placement = f"**{player.wordle_completions:,}** completions"
                 case _:
                     raise RuntimeError(f"Unexpected leaderboard category {category}")
 
@@ -1057,9 +1127,15 @@ class WordleOps:
 
                 player: Player = await Database.get_player(client, user)
                 puzzle_id: int = await WordleOps.get_puzzle_id(day)
-                puzzle: WordlePuzzle = await WordleOps.get_puzzle(
+                puzzle: WordlePuzzle | None = await WordleOps.get_puzzle(
                     client, puzzle_id, day
                 )
+
+                if not puzzle:
+                    raise RuntimeError(
+                        f"Cannot import WordleResult {player.id}_{puzzle_id} without puzzle data"
+                    )
+
                 result: WordleResult | None = await WordleOps.add_result(
                     client, attempts, player.id, puzzle.id
                 )
@@ -1154,8 +1230,54 @@ class WordleOps:
             raise RuntimeError(f"Failed to determine User ID for Wordle share {msg.id}")
 
         player: Player = await Database.get_player(client, user)
-        puzzle: WordlePuzzle = await WordleOps.get_puzzle(
+        puzzle: WordlePuzzle | None = await WordleOps.get_puzzle(
             client, puzzle_id, msg.created_at.date()
         )
 
+        if not puzzle:
+            raise RuntimeError(
+                f"Cannot import WordleResult {player.id}_{puzzle_id} without puzzle data"
+            )
+
         return await WordleOps.add_result(client, attempts, player.id, puzzle.id)
+
+    @staticmethod
+    async def get_definition(word: str) -> str | None:
+        """Query the Merriam-Webster Dictionary API for a word definition."""
+        if not DICTIONARY_API_KEY:
+            logger.debug(
+                f"Cannot fetch definition for {word} without a Dictionary API Key"
+            )
+
+            return
+
+        try:
+            async with AsyncClient() as client:
+                res: Response = (
+                    await client.get(
+                        f"https://www.dictionaryapi.com/api/v3/references/collegiate/json/{word}?key={DICTIONARY_API_KEY}"
+                    )
+                ).raise_for_status()
+
+                logger.debug(f"HTTP {res.status_code} GET {res.url}")
+                logger.trace(f"{res=}\n{res.text}")
+
+                data: list[dict[str, Any]] = res.json()
+
+                logger.debug(f"{data=}")
+
+                if not data:
+                    raise RuntimeError(
+                        f"No data returned from Dictionary API for {word}"
+                    )
+
+                entry: dict[str, Any] = data[0]
+
+                if not entry.get("shortdef", []):
+                    raise RuntimeError(
+                        f"No definition found for {word} in Dictionary API"
+                    )
+
+                return entry["shortdef"][0]
+        except Exception as e:
+            logger.opt(exception=e).error(f"Failed to fetch definition for {word}")

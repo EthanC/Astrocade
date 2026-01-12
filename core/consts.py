@@ -37,6 +37,7 @@ class Environment(StrEnum):
     WORDLE_POINTS_ATTEMPTS_5 = auto()
     WORDLE_POINTS_ATTEMPTS_6 = auto()
     WORDLE_POINTS_FAIL = auto()
+    DICTIONARY_API_KEY = auto()
 
 
 LOG_LEVEL: Final[str | None] = env.str(Environment.LOG_LEVEL, default=None)
@@ -124,3 +125,4 @@ ASTROCADE_ICON: Final[Path] = (
 ASTROCADE_LOGO: Final[Path] = (
     Path(__file__).resolve().parent.parent / "assets" / "astrocade_logo.png"
 )
+DICTIONARY_API_KEY: Final[str | None] = env.str(Environment.DICTIONARY_API_KEY, None)

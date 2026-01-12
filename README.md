@@ -77,6 +77,7 @@ All configuration is managed through environment variables on the system hosting
 | `WORDLE_POINTS_ATTEMPTS_5`      | Number of points awarded for a Wordle puzzle completion in 5 attempts.                                                                  | `2`                   |
 | `WORDLE_POINTS_ATTEMPTS_6`      | Number of points awarded for a Wordle puzzle completion in 6 attempts.                                                                  | `1`                   |
 | `WORDLE_POINTS_FAIL`            | Number of points deducted for a failed Wordle puzzle completion.                                                                        | `-5`                  |
+| `DICTIONARY_API_KEY`            | Free API Key for the [Merriam-Webster Collegiate Dictionary](https://dictionaryapi.com/).                                               | N/A                   |
 
 ## Disclaimer
 

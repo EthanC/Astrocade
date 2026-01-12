@@ -65,6 +65,67 @@ class WordlePuzzle(SQLModel, table=True):
     )
     """Wordle game results associated with the puzzle."""
 
+    average_attempts: ClassVar[int]
+    """Average attempts across all results for this Wordle puzzle."""
+
+    @hybrid_property
+    def average_attempts(self: Self) -> int:
+        """Return average attempts across all results for this Wordle puzzle."""
+        if not self.results:
+            return 0
+
+        total_attempts = sum(result.attempts for result in self.results)
+
+        return round(total_attempts / len(self.results))
+
+    @average_attempts.expression
+    def average_attempts(cls: Self) -> ScalarSelect[int]:
+        """Compute average attempts across all results for this Wordle puzzle."""
+        return (
+            select(func.coalesce(func.round(func.avg(WordleResult.attempts)), 0))
+            .where(WordleResult.puzzle_id == cls.id)
+            .correlate(cls)
+            .scalar_subquery()
+        )
+
+    fails: ClassVar[int]
+    """Total count of fails for this Wordle puzzle."""
+
+    @hybrid_property
+    def fails(self: Self) -> int:
+        """Return the total count of fails for this Wordle puzzle."""
+        return sum(1 for result in self.results if result.attempts == 7)
+
+    @fails.expression
+    def fails(cls: Self) -> ScalarSelect[int]:
+        """Compute the total count of fails for this Wordle puzzle."""
+        return (
+            select(func.coalesce(func.count(WordleResult.id), 0))
+            .where(WordleResult.puzzle_id == cls.id)
+            .where(WordleResult.attempts == 7)
+            .correlate(cls)
+            .scalar_subquery()
+        )
+
+    aces: ClassVar[int]
+    """Total count of aces for this Wordle puzzle."""
+
+    @hybrid_property
+    def aces(self: Self) -> int:
+        """Return the total count of aces for this Wordle puzzle."""
+        return sum(1 for result in self.results if result.attempts == 1)
+
+    @aces.expression
+    def aces(cls: Self) -> ScalarSelect[int]:
+        """Compute the total count of aces for this Wordle puzzle."""
+        return (
+            select(func.coalesce(func.count(WordleResult.id), 0))
+            .where(WordleResult.puzzle_id == cls.id)
+            .where(WordleResult.attempts == 1)
+            .correlate(cls)
+            .scalar_subquery()
+        )
+
 
 class Player(SQLModel, table=True):
     """Represents an Astrocade player."""
