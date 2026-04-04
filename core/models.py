@@ -3,7 +3,7 @@
 from datetime import date
 from typing import Any, ClassVar, Self
 
-from sqlalchemy import Case, ScalarSelect, case
+from sqlalchemy import Case, ColumnElement, ScalarSelect, case, cast
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlmodel import Field, Relationship, SQLModel, func, select
 
@@ -84,7 +84,7 @@ class WordlePuzzle(SQLModel, table=True):
         return (
             select(func.coalesce(func.round(func.avg(WordleResult.attempts)), 0))
             .where(WordleResult.puzzle_id == cls.id)
-            .correlate(cls)
+            .correlate_except(WordleResult)
             .scalar_subquery()
         )
 
@@ -100,10 +100,12 @@ class WordlePuzzle(SQLModel, table=True):
     def fails(cls: Self) -> ScalarSelect[int]:
         """Compute the total count of fails for this Wordle puzzle."""
         return (
-            select(func.coalesce(func.count(WordleResult.id), 0))
+            select(
+                func.coalesce(func.count(cast(ColumnElement[int], WordleResult.id)), 0)
+            )
             .where(WordleResult.puzzle_id == cls.id)
             .where(WordleResult.attempts == 7)
-            .correlate(cls)
+            .correlate_except(WordleResult)
             .scalar_subquery()
         )
 
@@ -119,10 +121,12 @@ class WordlePuzzle(SQLModel, table=True):
     def aces(cls: Self) -> ScalarSelect[int]:
         """Compute the total count of aces for this Wordle puzzle."""
         return (
-            select(func.coalesce(func.count(WordleResult.id), 0))
+            select(
+                func.coalesce(func.count(cast(ColumnElement[int], WordleResult.id)), 0)
+            )
             .where(WordleResult.puzzle_id == cls.id)
             .where(WordleResult.attempts == 1)
-            .correlate(cls)
+            .correlate_except(WordleResult)
             .scalar_subquery()
         )
 
@@ -258,7 +262,7 @@ class Player(SQLModel, table=True):
         return (
             select(func.coalesce(func.round(func.avg(WordleResult.attempts)), 0))
             .where(WordleResult.player_id == cls.id)
-            .correlate(cls)
+            .correlate_except(WordleResult)
             .scalar_subquery()
         )
 
@@ -274,7 +278,9 @@ class Player(SQLModel, table=True):
     def wordle_completions(cls: Self) -> ScalarSelect[int]:
         """Compute the total count of Wordle completions accumulated by the player."""
         return (
-            select(func.coalesce(func.count(WordleResult.id), 0))
+            select(
+                func.coalesce(func.count(cast(ColumnElement[int], WordleResult.id)), 0)
+            )
             .where(WordleResult.player_id == cls.id)
             .scalar_subquery()
         )
@@ -291,7 +297,9 @@ class Player(SQLModel, table=True):
     def wordle_fails(cls: Self) -> ScalarSelect[int]:
         """Compute the total count of Wordle fails accumulated by the player."""
         return (
-            select(func.coalesce(func.count(WordleResult.id), 0))
+            select(
+                func.coalesce(func.count(cast(ColumnElement[int], WordleResult.id)), 0)
+            )
             .where(WordleResult.player_id == cls.id)
             .where(WordleResult.attempts == 7)
             .scalar_subquery()
@@ -309,7 +317,9 @@ class Player(SQLModel, table=True):
     def wordle_aces(cls: Self) -> ScalarSelect[int]:
         """Compute the total count of Wordle aces accumulated by the player."""
         return (
-            select(func.coalesce(func.count(WordleResult.id), 0))
+            select(
+                func.coalesce(func.count(cast(ColumnElement[int], WordleResult.id)), 0)
+            )
             .where(WordleResult.player_id == cls.id)
             .where(WordleResult.attempts == 1)
             .scalar_subquery()

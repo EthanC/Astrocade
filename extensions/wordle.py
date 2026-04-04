@@ -8,7 +8,7 @@ from re import Match, Pattern
 from typing import Any, Final, Sequence
 
 import arc
-import httpx
+import niquests
 from arc import (
     AutodeferMode,
     ChannelParams,
@@ -50,8 +50,8 @@ from hikari.impl import (
     TextDisplayComponentBuilder,
 )
 from hikari.messages import MessageReferenceType
-from httpx import AsyncClient, Response
 from loguru import logger
+from niquests.models import Response
 from sqlmodel import func
 
 from core.consts import (
@@ -730,7 +730,7 @@ class WordleOps:
         async with AsyncSession(engine) as session:
             statement: SelectOfScalar[Player] = (
                 select(Player)
-                .where(Player.wordle_points > 0)
+                .where(Player.wordle_points != 0)
                 .order_by(
                     Player.wordle_points.asc()
                     if direction == Direction.ASCENDING
@@ -938,17 +938,14 @@ class WordleOps:
     @staticmethod
     async def _get_puzzle_metadata(day: date) -> dict[str, Any]:
         """Fetch Wordle puzzle metadata from NYT for the given day."""
-        async with AsyncClient() as client:
-            res: Response = (
-                await client.get(
-                    f"https://www.nytimes.com/svc/wordle/v2/{day.strftime('%Y-%m-%d')}.json"
-                )
-            ).raise_for_status()
+        res: Response = await niquests.aget(
+            f"https://www.nytimes.com/svc/wordle/v2/{day.strftime('%Y-%m-%d')}.json"
+        )
 
-            logger.debug(f"HTTP {res.status_code} GET {res.url}")
-            logger.trace(f"{res=}\n{res.text}")
+        logger.debug(f"HTTP {res.status_code} GET {res.url}")
+        logger.trace(f"{res=} {res.text=}")
 
-            return res.json()
+        return res.json()
 
     @staticmethod
     async def get_puzzle_id(day: date) -> int:
@@ -1251,33 +1248,27 @@ class WordleOps:
 
             return
 
+        res: Response = await niquests.aget(
+            f"https://www.dictionaryapi.com/api/v3/references/collegiate/json/{word}?key={DICTIONARY_API_KEY}"
+        )
+
+        logger.debug(f"HTTP {res.status_code} GET {res.url}")
+        logger.trace(f"{res=} {res.text=}")
+
+        data: list[dict[str, Any]] = res.json()
+
+        logger.trace(f"{data=}")
+
+        if not data:
+            raise RuntimeError(f"No data returned from Dictionary API for {word}")
+
         try:
-            async with AsyncClient() as client:
-                res: Response = (
-                    await client.get(
-                        f"https://www.dictionaryapi.com/api/v3/references/collegiate/json/{word}?key={DICTIONARY_API_KEY}"
-                    )
-                ).raise_for_status()
+            entry: dict[str, Any] = data[0]
 
-                logger.debug(f"HTTP {res.status_code} GET {res.url}")
-                logger.trace(f"{res=}\n{res.text}")
+            if not entry.get("shortdef", []):
+                raise RuntimeError(f"No definition found for {word} in Dictionary API")
 
-                data: list[dict[str, Any]] = res.json()
-
-                logger.debug(f"{data=}")
-
-                if not data:
-                    raise RuntimeError(
-                        f"No data returned from Dictionary API for {word}"
-                    )
-
-                entry: dict[str, Any] = data[0]
-
-                if not entry.get("shortdef", []):
-                    raise RuntimeError(
-                        f"No definition found for {word} in Dictionary API"
-                    )
-
-                return entry["shortdef"][0]
+            return entry["shortdef"][0]
         except Exception as e:
             logger.opt(exception=e).error(f"Failed to fetch definition for {word}")
+            logger.trace(f"{res=} {data=} {entry=}")
