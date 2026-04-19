@@ -5,6 +5,7 @@ from enum import IntEnum, StrEnum, auto
 from pathlib import Path
 from re import Pattern
 from typing import Final
+from zoneinfo import ZoneInfo
 
 from environs import env
 from loguru import logger
@@ -30,6 +31,7 @@ class Environment(StrEnum):
     DISCORD_BOT_TOKEN = auto()
     DISCORD_SERVER_IDS = auto()
     WORDLE_BOT_ID = auto()
+    WORDLE_CUTOFF_HOUR = auto()
     WORDLE_POINTS_ATTEMPTS_1 = auto()
     WORDLE_POINTS_ATTEMPTS_2 = auto()
     WORDLE_POINTS_ATTEMPTS_3 = auto()
@@ -38,6 +40,7 @@ class Environment(StrEnum):
     WORDLE_POINTS_ATTEMPTS_6 = auto()
     WORDLE_POINTS_FAIL = auto()
     DICTIONARY_API_KEY = auto()
+    TZ = auto()
 
 
 LOG_LEVEL: Final[str | None] = env.str(Environment.LOG_LEVEL, default=None)
@@ -116,6 +119,7 @@ REGEX_WORDLE_STREAK: Final[Pattern[str]] = re.compile(
 REGEX_WORDLE_STREAK_ATTEMPT: Final[Pattern[str]] = re.compile(r"([a-zA-Z0-9]+)/\d+:")
 REGEX_WORDLE_STREAK_TAG: Final[Pattern[str]] = re.compile(r"<@(\w+)>|@(\w+)")
 REGEX_WORDLE_SHARE: Final[Pattern[str]] = re.compile(r"Wordle\s+(\d+)\s+([0-6X])/6")
+WORDLE_CUTOFF_HOUR: Final[int] = env.int(Environment.WORDLE_CUTOFF_HOUR, 3)
 WORDLE_ICON: Final[Path] = (
     Path(__file__).resolve().parent.parent / "assets" / "wordle_icon.png"
 )
@@ -126,3 +130,4 @@ ASTROCADE_LOGO: Final[Path] = (
     Path(__file__).resolve().parent.parent / "assets" / "astrocade_logo.png"
 )
 DICTIONARY_API_KEY: Final[str | None] = env.str(Environment.DICTIONARY_API_KEY, None)
+TZ: Final[ZoneInfo] = ZoneInfo(env.str(Environment.TZ, "UTC"))

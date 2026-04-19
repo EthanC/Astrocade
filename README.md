@@ -33,6 +33,7 @@ services:
       LOG_DISCORD_WEBHOOK_LEVEL: WARNING
       DISCORD_BOT_TOKEN: XXXXXXXX
       DISCORD_SERVER_IDS: 0000000000
+      TZ: America/Denver
     volumes:
       - /path/to/database.db:/astrocade/astrocade.db
     restart: unless-stopped
@@ -70,6 +71,7 @@ All configuration is managed through environment variables on the system hosting
 | `DISCORD_BOT_TOKEN` (Required)  | [Discord API](https://discord.com/developers/docs/quick-start/getting-started#fetching-your-credentials) credentials for your Bot user. | N/A                   |
 | `DISCORD_SERVER_IDS` (Required) | Comma-separated list of Discord server IDs to sync commands to.                                                                         | N/A                   |
 | `WORDLE_BOT_ID`                 | User ID of the [Wordle Discord Activity](https://discord.com/discovery/applications/1211781489931452447) Bot user.                      | `1211781489931452447` |
+| `WORDLE_CUTOFF_HOUR`            | Hour after midnight (local time) that determines the cutoff for treating messages as belonging to the previous day.                     | `3`                  |
 | `WORDLE_POINTS_ATTEMPTS_1`      | Number of points awarded for a Wordle puzzle completion in 1 attempt.                                                                   | `10`                  |
 | `WORDLE_POINTS_ATTEMPTS_2`      | Number of points awarded for a Wordle puzzle completion in 2 attempts.                                                                  | `5`                   |
 | `WORDLE_POINTS_ATTEMPTS_3`      | Number of points awarded for a Wordle puzzle completion in 3 attempts.                                                                  | `4`                   |
@@ -78,6 +80,7 @@ All configuration is managed through environment variables on the system hosting
 | `WORDLE_POINTS_ATTEMPTS_6`      | Number of points awarded for a Wordle puzzle completion in 6 attempts.                                                                  | `1`                   |
 | `WORDLE_POINTS_FAIL`            | Number of points deducted for a failed Wordle puzzle completion.                                                                        | `-5`                  |
 | `DICTIONARY_API_KEY`            | Free API Key for the [Merriam-Webster Collegiate Dictionary](https://dictionaryapi.com/).                                               | N/A                   |
+| `TZ`                            | [IANA](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) time zone key for the host machine time zone.                      | `UTC`                 |
 
 ## Disclaimer
 

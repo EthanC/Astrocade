@@ -61,7 +61,9 @@ from core.consts import (
     REGEX_WORDLE_STREAK,
     REGEX_WORDLE_STREAK_ATTEMPT,
     REGEX_WORDLE_STREAK_TAG,
+    TZ,
     WORDLE_BOT_ID,
+    WORDLE_CUTOFF_HOUR,
     WORDLE_ICON,
     Direction,
     WordleLeaderboardType,
@@ -116,6 +118,9 @@ async def command_wordle_import(
         GuildTextChannel | None,
         ChannelParams("Channel whose message history will be searched."),
     ] = None,
+    cutoff: Option[
+        str | None, StrParams("Message ID to stop importing data at.")
+    ] = None,
 ) -> None:
     """Handle the /wordle import command."""
     if not channel:
@@ -132,8 +137,17 @@ async def command_wordle_import(
 
     msgs: Sequence[Message] = await ctx.client.rest.fetch_messages(channel)
     found: int = 0
+    searched: int = 0
 
     for msg in msgs:
+        searched += 1
+
+        if cutoff and str(msg.id) == cutoff:
+            logger.debug(f"Reached cutoff message during Wordle data import")
+            logger.trace(f"{cutoff=} {msg=}")
+
+            break
+
         # Check for Forwarded Message
         if msg.message_reference:
             ref: MessageReference = msg.message_reference
@@ -155,7 +169,7 @@ async def command_wordle_import(
     if not found:
         await ctx.respond(
             component=Templates.generic(
-                TemplateType.INFO, f"No Wordle data found in {len(msgs):,} messages."
+                TemplateType.INFO, f"No Wordle data found in {searched:,} messages."
             )
         )
 
@@ -164,7 +178,7 @@ async def command_wordle_import(
     await ctx.respond(
         component=Templates.generic(
             TemplateType.SUCCESS,
-            f"Imported {found:,} Wordle result(s) from {len(msgs):,} messages.",
+            f"Imported {found:,} Wordle result(s) from {searched:,} messages.",
         )
     )
 
@@ -1077,7 +1091,26 @@ class WordleOps:
 
                 continue
 
-            day: date = msg.created_at.date() - timedelta(days=1)  # Yesterday
+            date_created: date = msg.created_at.astimezone(TZ)
+            date_effective: date = date_created.date()
+
+            if date_created.hour < WORDLE_CUTOFF_HOUR:
+                date_effective -= timedelta(days=1)
+
+                logger.warning(
+                    f"Wordle streak message {msg.id} creation is prior to cutoff hour, subtracting an additional day"
+                )
+                logger.warning(
+                    f"{date_created.hour=} {date_effective=} {WORDLE_CUTOFF_HOUR=}"
+                )
+
+            date_effective -= timedelta(days=1)  # "Here are yesterday's results"
+
+            logger.warning(
+                f"Wordle Streak message {msg.id} determined date is {date_effective.ctime()}"
+            )
+            logger.warning(f"{date_created.date()=} {date_effective=}")
+
             attempts: int = (
                 7 if (attempts_raw := attempt.group(1)) == "X" else int(attempts_raw)
             )
@@ -1123,9 +1156,9 @@ class WordleOps:
                     continue
 
                 player: Player = await Database.get_player(client, user)
-                puzzle_id: int = await WordleOps.get_puzzle_id(day)
+                puzzle_id: int = await WordleOps.get_puzzle_id(date_effective)
                 puzzle: WordlePuzzle | None = await WordleOps.get_puzzle(
-                    client, puzzle_id, day
+                    client, puzzle_id, date_effective
                 )
 
                 if not puzzle:
