@@ -1100,7 +1100,7 @@ class WordleOps:
                 logger.warning(
                     f"Wordle streak message {msg.id} creation is prior to cutoff hour, subtracting an additional day"
                 )
-                logger.warning(
+                logger.debug(
                     f"{date_created.hour=} {date_effective=} {WORDLE_CUTOFF_HOUR=}"
                 )
 
@@ -1109,7 +1109,7 @@ class WordleOps:
             logger.warning(
                 f"Wordle Streak message {msg.id} determined date is {date_effective.ctime()}"
             )
-            logger.warning(f"{date_created.date()=} {date_effective=}")
+            logger.debug(f"{date_created.date()=} {date_effective=}")
 
             attempts: int = (
                 7 if (attempts_raw := attempt.group(1)) == "X" else int(attempts_raw)
