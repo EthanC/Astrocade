@@ -1106,10 +1106,10 @@ class WordleOps:
 
             date_effective -= timedelta(days=1)  # "Here are yesterday's results"
 
-            logger.warning(
+            logger.debug(
                 f"Wordle Streak message {msg.id} determined date is {date_effective.ctime()}"
             )
-            logger.debug(f"{date_created.date()=} {date_effective=}")
+            logger.trace(f"{date_created.date()=} {date_effective=}")
 
             attempts: int = (
                 7 if (attempts_raw := attempt.group(1)) == "X" else int(attempts_raw)
