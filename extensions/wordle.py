@@ -52,7 +52,7 @@ from hikari.impl import (
 from hikari.messages import MessageReferenceType
 from loguru import logger
 from niquests.models import Response
-from sqlmodel import func
+from sqlmodel import col, func
 
 from core.consts import (
     ASTROCADE_LOGO,
@@ -539,6 +539,65 @@ async def command_wordle_import_message(ctx: GatewayContext, msg: Message) -> No
     )
 
 
+@group.include
+@arc.with_hook(Hooks.command_use)
+@arc.slash_subcommand(
+    "missing", "Get a list of missing Wordle puzzle completions for the provided user."
+)
+async def command_wordle_missing(
+    ctx: GatewayContext,
+    user: Option[
+        User | None,
+        UserParams(
+            "User to get missing Wordle puzzle completions for. Defaults to yourself."
+        ),
+    ] = None,
+    limit: Option[
+        int,
+        IntParams(
+            "Number of missing puzzles to fetch. Defaults to 25.", min=1, max=100
+        ),
+    ] = 25,
+) -> None:
+    """Handle the /wordle missing command."""
+    if not user:
+        user = ctx.author
+
+    total: int = await WordleOps.count_puzzles(ctx.client)
+    missing: int = await WordleOps.count_missing_puzzles(ctx.client, user.id)
+
+    if not missing:
+        await ctx.respond(
+            component=Templates.generic(
+                TemplateType.INFO,
+                f"Player {user.mention} is not missing any Wordle puzzle completions."
+                if total
+                else "There are no Wordle puzzles to be missing completion yet.",
+            )
+        )
+
+        return
+
+    puzzles: list[WordlePuzzle] = await WordleOps.get_missing_puzzles(
+        ctx.client, user.id, limit
+    )
+
+    result: str = f"## Missing Wordle Puzzle Completions"
+    result += f"\n-# {user.mention} is missing **{missing:,}** of {total:,} completions ({percentage(missing, total):,}%)."
+
+    for puzzle in puzzles:
+        result += f"\n* `{puzzle.id}` ||**`{puzzle.solution}`**||"
+
+    remaining: int = missing - len(puzzles)
+
+    if remaining:
+        result += f"\n-# ...and **{remaining:,}** more."
+
+    await ctx.respond(
+        component=Templates.generic_thumb(TemplateType.SUCCESS, result, WORDLE_ICON)
+    )
+
+
 @plugin.listen()
 async def event_wordle_message(event: GuildMessageCreateEvent) -> None:
     """Handle server messages upon creation."""
@@ -948,6 +1007,73 @@ class WordleOps:
             logger.debug(f"Found {count} WordlePuzzles in database")
 
             return count
+
+    @staticmethod
+    async def count_missing_puzzles(client: GatewayClient, player_id: int) -> int:
+        """Count the WordlePuzzles the given Player has not completed."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+
+        async with AsyncSession(engine) as session:
+            statement: SelectOfScalar[int] = (
+                select(func.count())
+                .select_from(WordlePuzzle)
+                .where(
+                    col(WordlePuzzle.id).not_in(
+                        select(WordleResult.puzzle_id).where(
+                            WordleResult.player_id == player_id
+                        )
+                    )
+                )
+            )
+
+            logger.debug(
+                f"Counting missing WordlePuzzles for player {player_id} in database"
+            )
+            logger.trace(f"{statement=}\n{engine=}\n{session=}")
+
+            results: ScalarResult[int] = await session.exec(statement)
+            count: int = results.one()
+
+            logger.debug(f"Found {count} missing WordlePuzzles for player {player_id}")
+
+            return count
+
+    @staticmethod
+    async def get_missing_puzzles(
+        client: GatewayClient, player_id: int, limit: int
+    ) -> list[WordlePuzzle]:
+        """Get the WordlePuzzles the given Player has not completed, most recent first."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+        puzzles: list[WordlePuzzle] = []
+
+        async with AsyncSession(engine) as session:
+            statement: SelectOfScalar[WordlePuzzle] = (
+                select(WordlePuzzle)
+                .where(
+                    col(WordlePuzzle.id).not_in(
+                        select(WordleResult.puzzle_id).where(
+                            WordleResult.player_id == player_id
+                        )
+                    )
+                )
+                .order_by(col(WordlePuzzle.id).desc())
+                .limit(limit)
+            )
+
+            logger.debug(
+                f"Find missing WordlePuzzles for player {player_id} in database"
+            )
+            logger.trace(f"{statement=}\n{engine=}\n{session=}")
+
+            results: ScalarResult[WordlePuzzle] = await session.exec(statement)
+            puzzles = list(results.all())
+
+            logger.debug(
+                f"Found {len(puzzles):,} missing WordlePuzzles for player {player_id}"
+            )
+            logger.trace(f"{puzzles=}")
+
+            return puzzles
 
     @staticmethod
     async def _get_puzzle_metadata(day: date) -> dict[str, Any]:
