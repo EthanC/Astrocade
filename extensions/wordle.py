@@ -201,7 +201,7 @@ async def command_wordle_stats(
 
     player = await Database.get_player(ctx.client, user.id)
 
-    if not player.wordle_points:
+    if not player.wordle_points_gross:
         await ctx.respond(
             component=Templates.generic(
                 TemplateType.INFO, "No Wordle statistics found for this player."
