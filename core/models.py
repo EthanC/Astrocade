@@ -3,7 +3,7 @@
 from datetime import date
 from typing import Any, ClassVar, Self, cast
 
-from sqlalchemy import Case, ColumnElement, ScalarSelect, case
+from sqlalchemy import Case, ColumnElement, Integer, ScalarSelect, case
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlmodel import Field, Relationship, SQLModel, func, select
 
@@ -76,13 +76,18 @@ class WordlePuzzle(SQLModel, table=True):
 
         total_attempts = sum(result.attempts for result in self.results)
 
-        return round(total_attempts / len(self.results))
+        # int(x + 0.5) rounds half away from zero to match SQLite's ROUND()
+        return int(total_attempts / len(self.results) + 0.5)
 
     @average_attempts.expression
     def average_attempts(cls: Self) -> ScalarSelect[int]:
         """Compute average attempts across all results for this Wordle puzzle."""
         return (
-            select(func.coalesce(func.round(func.avg(WordleResult.attempts)), 0))
+            select(
+                func.coalesce(func.round(func.avg(WordleResult.attempts)), 0).cast(
+                    Integer
+                )
+            )
             .where(WordleResult.puzzle_id == cls.id)
             .correlate_except(WordleResult)
             .scalar_subquery()
@@ -254,13 +259,18 @@ class Player(SQLModel, table=True):
 
         total_attempts = sum(result.attempts for result in self.wordle_results)
 
-        return round(total_attempts / len(self.wordle_results))
+        # int(x + 0.5) rounds half away from zero to match SQLite's ROUND()
+        return int(total_attempts / len(self.wordle_results) + 0.5)
 
     @wordle_average_attempts.expression
     def wordle_average_attempts(cls: Self) -> ScalarSelect[int]:
         """Compute average attempts across all associated Wordle games."""
         return (
-            select(func.coalesce(func.round(func.avg(WordleResult.attempts)), 0))
+            select(
+                func.coalesce(func.round(func.avg(WordleResult.attempts)), 0).cast(
+                    Integer
+                )
+            )
             .where(WordleResult.player_id == cls.id)
             .correlate_except(WordleResult)
             .scalar_subquery()
