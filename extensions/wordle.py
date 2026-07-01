@@ -805,9 +805,20 @@ class WordleOps:
                 select(Player)
                 .where(Player.wordle_points != 0)
                 .order_by(
-                    Player.wordle_points.asc()
-                    if direction == Direction.ASCENDING
-                    else Player.wordle_points.desc()
+                    # Tiebreakers: Gross Points -> Average Attempts
+                    *(
+                        (
+                            Player.wordle_points.asc(),
+                            Player.wordle_points_gross.asc(),
+                            Player.wordle_average_attempts.desc(),
+                        )
+                        if direction == Direction.ASCENDING
+                        else (
+                            Player.wordle_points.desc(),
+                            Player.wordle_points_gross.desc(),
+                            Player.wordle_average_attempts.asc(),
+                        )
+                    )
                 )
                 .limit(limit)
             )
