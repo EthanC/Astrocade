@@ -2,8 +2,6 @@
 
 ![Python](https://img.shields.io/badge/Python-3-blue?logo=python&logoColor=white)
 ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/ethanc/astrocade/workflow.yaml)
-![Docker Pulls](https://img.shields.io/docker/pulls/ethanchrisp/astrocade?label=Docker%20Pulls)
-![Docker Image Size (tag)](https://img.shields.io/docker/image-size/ethanchrisp/astrocade/latest?label=Docker%20Image%20Size)
 
 Astrocade is a Discord Bot that enhances the Discord Activities experience.
 
@@ -26,7 +24,7 @@ Edit and run this `compose.yaml` example with `docker compose up -d`.
 services:
   astrocade:
     container_name: astrocade
-    image: ethanchrisp/astrocade:latest
+    image: ghcr.io/ethanc/astrocade:latest
     environment:
       LOG_LEVEL: INFO
       LOG_DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/XXXXXXXX/XXXXXXXX
