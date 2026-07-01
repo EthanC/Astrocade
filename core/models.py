@@ -1,9 +1,9 @@
 """Astrocade database models."""
 
 from datetime import date
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar, Self, cast
 
-from sqlalchemy import Case, ColumnElement, ScalarSelect, case, cast
+from sqlalchemy import Case, ColumnElement, ScalarSelect, case
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlmodel import Field, Relationship, SQLModel, func, select
 
