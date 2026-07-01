@@ -66,22 +66,24 @@ class WordlePuzzle(SQLModel, table=True):
     """Wordle game results associated with the puzzle."""
 
     average_attempts: ClassVar[int]
-    """Average attempts across all results for this Wordle puzzle."""
+    """Average attempts across all non-failed results for this Wordle puzzle."""
 
     @hybrid_property
     def average_attempts(self: Self) -> int:
-        """Return average attempts across all results for this Wordle puzzle."""
-        if not self.results:
+        """Return average attempts across all non-failed results for this Wordle puzzle."""
+        attempts: list[int] = [
+            result.attempts for result in self.results if result.attempts != 7
+        ]
+
+        if not attempts:
             return 0
 
-        total_attempts = sum(result.attempts for result in self.results)
-
         # int(x + 0.5) rounds half away from zero to match SQLite's ROUND()
-        return int(total_attempts / len(self.results) + 0.5)
+        return int(sum(attempts) / len(attempts) + 0.5)
 
     @average_attempts.expression
     def average_attempts(cls: Self) -> ScalarSelect[int]:
-        """Compute average attempts across all results for this Wordle puzzle."""
+        """Compute average attempts across all non-failed results for this Wordle puzzle."""
         return (
             select(
                 func.coalesce(func.round(func.avg(WordleResult.attempts)), 0).cast(
@@ -89,6 +91,7 @@ class WordlePuzzle(SQLModel, table=True):
                 )
             )
             .where(WordleResult.puzzle_id == cls.id)
+            .where(WordleResult.attempts != 7)
             .correlate_except(WordleResult)
             .scalar_subquery()
         )
@@ -249,22 +252,24 @@ class Player(SQLModel, table=True):
         )
 
     wordle_average_attempts: ClassVar[int]
-    """Average attempts across all associated Wordle games."""
+    """Average attempts across all non-failed associated Wordle games."""
 
     @hybrid_property
     def wordle_average_attempts(self: Self) -> int:
-        """Return average attempts across all associated Wordle games."""
-        if not self.wordle_results:
+        """Return average attempts across all non-failed associated Wordle games."""
+        attempts: list[int] = [
+            result.attempts for result in self.wordle_results if result.attempts != 7
+        ]
+
+        if not attempts:
             return 0
 
-        total_attempts = sum(result.attempts for result in self.wordle_results)
-
         # int(x + 0.5) rounds half away from zero to match SQLite's ROUND()
-        return int(total_attempts / len(self.wordle_results) + 0.5)
+        return int(sum(attempts) / len(attempts) + 0.5)
 
     @wordle_average_attempts.expression
     def wordle_average_attempts(cls: Self) -> ScalarSelect[int]:
-        """Compute average attempts across all associated Wordle games."""
+        """Compute average attempts across all non-failed associated Wordle games."""
         return (
             select(
                 func.coalesce(func.round(func.avg(WordleResult.attempts)), 0).cast(
@@ -272,6 +277,7 @@ class Player(SQLModel, table=True):
                 )
             )
             .where(WordleResult.player_id == cls.id)
+            .where(WordleResult.attempts != 7)
             .correlate_except(WordleResult)
             .scalar_subquery()
         )
