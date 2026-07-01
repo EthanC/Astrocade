@@ -1,25 +1,25 @@
 [project]
 name = "astrocade"
-version = "1.1.1"
+version = "1.2.0"
 description = "Discord Bot that enhances the Discord Activities experience."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "aiosqlite>=0.22.1",
     "environs>=15.0.1",
-    "hikari-arc>=2.2.0",
+    "hikari-arc>=2.3.0",
     "loguru>=0.7.3",
     "loguru-discord>=2.1.0",
-    "niquests>=3.18.6",
-    "sqlmodel>=0.0.38",
-    "tzdata>=2026.1",
+    "niquests>=3.20.0",
+    "sqlmodel>=0.0.39",
+    "tzdata>=2026.2",
     "uvloop>=0.22.1 ; sys_platform != 'win32'",
 ]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.15.11",
-    "ty>=0.0.31",
+    "ruff>=0.15.20",
+    "ty>=0.0.55",
 ]
 
 [tool.ruff]
