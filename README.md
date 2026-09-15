@@ -26,6 +26,8 @@ services:
     container_name: astrocade
     image: ghcr.io/ethanc/astrocade:latest
     environment:
+      PUID: 1000
+      PGID: 1000
       LOG_LEVEL: INFO
       LOG_DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/XXXXXXXX/XXXXXXXX
       LOG_DISCORD_WEBHOOK_LEVEL: WARNING
@@ -66,6 +68,8 @@ All configuration is managed through environment variables on the system hosting
 | `LOG_DISCORD_WEBHOOK_URL`       | Discord Webhook URL to forward log events to.                                                                                           | N/A                   |
 | `LOG_DISCORD_WEBHOOK_LEVEL`     | [Loguru level](https://loguru.readthedocs.io/en/stable/api/logger.html#levels) of log events to forward to Discord.                     | N/A                   |
 | `DATABASE_PATH`                 | Path to where the SQLite Database is stored.                                                                                            | `./astrocade.db`      |
+| `PUID`                          | Docker container setting for the UID that runs Astrocade and owns its writable data.                                                    | `1000`                |
+| `PGID`                          | Docker container setting for the GID that runs Astrocade and owns its writable data.                                                    | `1000`                |
 | `DISCORD_BOT_TOKEN` (Required)  | [Discord API](https://discord.com/developers/docs/quick-start/getting-started#fetching-your-credentials) credentials for your Bot user. | N/A                   |
 | `DISCORD_SERVER_IDS` (Required) | Comma-separated list of Discord server IDs to sync commands to.                                                                         | N/A                   |
 | `WORDLE_BOT_ID`                 | User ID of the [Wordle Discord Activity](https://discord.com/discovery/applications/1211781489931452447) Bot user.                      | `1211781489931452447` |
