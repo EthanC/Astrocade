@@ -1,13 +1,13 @@
 """SQLite database connector for Astrocade."""
 
 from pathlib import Path
+from typing import Any, cast
 
 from arc import GatewayClient, GatewayContext
 from loguru import logger
-from sqlalchemy import ScalarResult, inspect
+from sqlalchemy import ScalarResult
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
-from sqlalchemy.orm import InstanceState, selectinload
-from sqlalchemy.orm.mapper import Mapper
+from sqlalchemy.orm import InstanceState, QueryableAttribute, selectinload
 from sqlmodel import Field, SQLModel, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel.sql.expression import SelectOfScalar
@@ -61,16 +61,13 @@ class Database:
         engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
 
         async with AsyncSession(engine) as session:
-            player_mapper: Mapper[Player] = inspect(Player)
-            result_mapper: Mapper[WordleResult] = inspect(WordleResult)
-
             statement: SelectOfScalar[Player] = (
                 select(Player)
                 .where(Player.id == id)
                 .options(
                     selectinload(
-                        player_mapper.relationships["wordle_results"]
-                    ).selectinload(result_mapper.relationships["puzzle"])
+                        cast(QueryableAttribute[Any], Player.wordle_results)
+                    ).selectinload(cast(QueryableAttribute[Any], WordleResult.puzzle))
                 )
             )
 

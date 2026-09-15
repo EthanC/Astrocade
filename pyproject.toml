@@ -6,20 +6,20 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "aiosqlite>=0.22.1",
-    "environs>=15.1.0",
+    "environs>=15.2.0",
     "hikari-arc>=2.3.2",
     "loguru>=0.7.3",
     "loguru-discord>=2.1.0",
-    "niquests>=3.21.0",
-    "sqlmodel>=0.0.39",
-    "tzdata>=2026.3",
+    "niquests>=3.21.1",
+    "sqlmodel>=0.0.42",
+    "tzdata>=2026.4",
     "uvloop>=0.22.1 ; sys_platform != 'win32'",
 ]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.16.4",
-    "ty>=0.0.73",
+    "ruff>=0.16.7",
+    "ty>=0.0.81",
 ]
 
 [tool.ruff]
