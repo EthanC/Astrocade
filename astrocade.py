@@ -14,6 +14,7 @@ from hikari import (
     ApplicationContextType,
     GatewayBot,
     GatewayConnectionError,
+    GatewayServerClosedConnectionError,
     Intents,
     Permissions,
     Status,
@@ -50,7 +51,13 @@ async def start() -> None:
 
     if LOG_DISCORD_WEBHOOK_URL:
         logger.add(
-            DiscordSink(LOG_DISCORD_WEBHOOK_URL, suppress=[GatewayConnectionError]),
+            DiscordSink(
+                LOG_DISCORD_WEBHOOK_URL,
+                suppress=[
+                    GatewayConnectionError,
+                    GatewayServerClosedConnectionError,
+                ],
+            ),
             level=LOG_DISCORD_WEBHOOK_LEVEL,
             backtrace=False,
         )
