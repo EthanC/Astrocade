@@ -1,4 +1,4 @@
-FROM python:alpine AS builder
+FROM python:3.15-alpine AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
@@ -11,7 +11,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 
-FROM python:alpine AS runtime
+FROM python:3.15-alpine AS runtime
 
 ENV DATABASE_PATH=/astrocade/astrocade.db \
     PATH="/opt/venv/bin:$PATH" \
