@@ -11,6 +11,7 @@ dependencies = [
     "loguru>=0.7.3",
     "loguru-discord>=2.2.0",
     "niquests>=3.21.2",
+    "sqlalchemy[asyncio]>=2.1.5",
     "sqlmodel>=0.0.48",
     "tzdata>=2026.5",
     "uvloop>=0.23.0 ; sys_platform != 'win32'",
