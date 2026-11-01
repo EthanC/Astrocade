@@ -132,6 +132,7 @@ WORDLE_SEASONS_PER_YEAR: Final[int] = env.int(
     ),
 )
 MAX_RESULTS_IMAGE_BYTES: Final[int] = 5 * 1024 * 1024
+MAX_IMPORT_DATABASE_BYTES: Final[int] = 25 * 1024 * 1024
 WORDLE_ICON: Final[Path] = (
     Path(__file__).resolve().parent.parent / "assets" / "wordle_icon.png"
 )

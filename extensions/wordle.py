@@ -1,6 +1,7 @@
 """Extension containing Wordle commands."""
 
 import re
+import sqlite3
 from asyncio import sleep, to_thread
 from collections import Counter
 from datetime import date, datetime, timedelta
@@ -11,6 +12,7 @@ from typing import Any, Final, NamedTuple, Sequence
 import arc
 import niquests
 from arc import (
+    AttachmentParams,
     AutocompleteData,
     AutodeferMode,
     ChannelParams,
@@ -26,6 +28,7 @@ from arc import (
 from hikari import (
     Activity,
     ActivityType,
+    Attachment,
     CommandChoice,
     CommandInteractionMetadata,
     ContainerComponent,
@@ -62,6 +65,7 @@ from sqlmodel.sql.expression import Select
 from core.consts import (
     ASTROCADE_LOGO,
     DICTIONARY_API_KEY,
+    MAX_IMPORT_DATABASE_BYTES,
     MAX_RESULTS_IMAGE_BYTES,
     REGEX_WORDLE_SHARE,
     REGEX_WORDLE_STREAK,
@@ -125,6 +129,37 @@ LEADERBOARDS: Final[dict[WordleLeaderboardType, tuple[str, str, str]]] = {
 
 class InvalidSeasonError(Exception):
     """Raised when a season option value does not identify a season."""
+
+
+class InvalidDatabaseError(Exception):
+    """Raised when a provided file is not a readable Astrocade database."""
+
+
+class WordleImportSummary(NamedTuple):
+    """Counts of Wordle data merged from an exported Astrocade database."""
+
+    puzzles: int
+    """WordlePuzzles added to the database."""
+
+    players: int
+    """Players added to the database."""
+
+    results: int
+    """WordleResults added to the database."""
+
+    streaks: int
+    """WordleStreaks added to the database."""
+
+    duplicates: int
+    """Records skipped because an identical record already exists."""
+
+    conflicts: int
+    """Records skipped because they are invalid or disagree with existing data."""
+
+    @property
+    def added(self) -> int:
+        """Total records added to the database."""
+        return self.puzzles + self.players + self.results + self.streaks
 
 
 class WordleStats(NamedTuple):
@@ -207,7 +242,7 @@ def ext_loader(client: GatewayClient) -> None:
 @arc.with_hook(Hooks.command_use)
 @arc.slash_subcommand(
     "import",
-    "Import channel Wordle data to populate player statistics. Requires Administrator permission.",
+    "Import Wordle data from channel history or an exported database. Requires Administrator permission.",
 )
 async def command_wordle_import(
     ctx: GatewayContext,
@@ -218,8 +253,52 @@ async def command_wordle_import(
     cutoff: Option[
         str | None, StrParams("Message ID to stop importing data at.")
     ] = None,
+    database: Option[
+        Attachment | None,
+        AttachmentParams(
+            "Exported Astrocade database to merge Wordle data from, instead of a channel."
+        ),
+    ] = None,
 ) -> None:
     """Handle the /wordle import command."""
+    if database:
+        if database.size > MAX_IMPORT_DATABASE_BYTES:
+            raise InvalidDatabaseError(
+                f"`{database.filename}` is too large ({database.size:,} bytes)."
+            )
+
+        summary: WordleImportSummary = await WordleOps.import_database(
+            ctx.client, await database.read()
+        )
+        skipped: str = ""
+
+        if summary.duplicates or summary.conflicts:
+            skipped = f"\n-# Skipped **{summary.duplicates:,}** duplicate and **{summary.conflicts:,}** conflicting record(s), keeping existing data."
+
+        if not summary.added:
+            await ctx.respond(
+                component=Templates.generic(
+                    TemplateType.INFO,
+                    f"No new Wordle data found in `{database.filename}`.{skipped}",
+                )
+            )
+
+            return
+
+        added: str = f"**{summary.puzzles:,}** puzzles"
+        added += f", **{summary.results:,}** results"
+        added += f", **{summary.players:,}** players"
+        added += f", and **{summary.streaks:,}** streaks"
+
+        await ctx.respond(
+            component=Templates.generic(
+                TemplateType.SUCCESS,
+                f"Merged Wordle data from `{database.filename}`: {added} added.{skipped}",
+            )
+        )
+
+        return
+
     if not channel:
         cur_channel: PartialChannel = await ctx.client.rest.fetch_channel(
             ctx.channel_id
@@ -745,6 +824,14 @@ async def error_handler(ctx: GatewayContext, error: Exception) -> None:
         )
 
         return
+    elif isinstance(error, InvalidDatabaseError):
+        await ctx.respond(
+            component=Templates.generic(
+                TemplateType.ERROR, f"Failed to import database: {error}"
+            )
+        )
+
+        return
 
     await Hooks.command_error(ctx, error)
 
@@ -943,6 +1030,261 @@ class WordleOps:
             )
 
             return record
+
+    @staticmethod
+    def _read_database(data: bytes) -> dict[str, list[tuple[Any, ...]]]:
+        """Read the Wordle tables of an exported Astrocade database from its raw bytes."""
+        if not data.startswith(b"SQLite format 3\x00"):
+            raise InvalidDatabaseError("File is not a SQLite database.")
+
+        queries: dict[str, str] = {
+            "wordle_puzzles": "SELECT id, day, solution FROM wordle_puzzles",
+            "wordle_results": "SELECT id, attempts, player_id, puzzle_id FROM wordle_results",
+            "wordle_streaks": "SELECT id, channel_id, streak, puzzle_id FROM wordle_streaks",
+        }
+        optional: set[str] = {"wordle_streaks"}
+        tables: dict[str, list[tuple[Any, ...]]] = {}
+        connection: sqlite3.Connection = sqlite3.connect(":memory:")
+
+        try:
+            connection.deserialize(data)
+
+            existing: set[str] = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            missing: list[str] = [
+                table
+                for table in queries
+                if table not in existing and table not in optional
+            ]
+
+            if missing:
+                raise InvalidDatabaseError(
+                    f"Database is missing the {', '.join(missing)} table(s)."
+                )
+
+            for table, query in queries.items():
+                tables[table] = (
+                    connection.execute(query).fetchall() if table in existing else []
+                )
+        except sqlite3.DatabaseError as e:
+            raise InvalidDatabaseError(f"Database could not be read ({e}).") from e
+        finally:
+            connection.close()
+
+        logger.debug(
+            f"Read {', '.join(f'{len(rows):,} {table}' for table, rows in tables.items())} from provided database"
+        )
+
+        return tables
+
+    @staticmethod
+    async def import_database(
+        client: GatewayClient, data: bytes
+    ) -> WordleImportSummary:
+        """Merge the Wordle data of an exported Astrocade database into the database, keeping existing data."""
+        source: dict[str, list[tuple[Any, ...]]] = await to_thread(
+            WordleOps._read_database, data
+        )
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+        new_puzzles: list[WordlePuzzle] = []
+        new_players: list[Player] = []
+        new_results: list[WordleResult] = []
+        new_streaks: list[WordleStreak] = []
+        rejected: set[int] = set()
+        duplicates: int = 0
+        conflicts: int = 0
+
+        async with AsyncSession(engine) as session:
+            puzzles: dict[int, tuple[date, str]] = {
+                id: (day, solution)
+                for id, day, solution in (
+                    await session.exec(
+                        select(WordlePuzzle.id, WordlePuzzle.day, WordlePuzzle.solution)
+                    )
+                ).all()
+            }
+            days: dict[date, int] = {day: id for id, (day, _) in puzzles.items()}
+            players: set[int] = set((await session.exec(select(Player.id))).all())
+            results: dict[str, int] = {
+                id: attempts
+                for id, attempts in (
+                    await session.exec(select(WordleResult.id, WordleResult.attempts))
+                ).all()
+            }
+            streaks: dict[int, tuple[int, int]] = {
+                id: (channel_id, puzzle_id)
+                for id, channel_id, puzzle_id in (
+                    await session.exec(
+                        select(
+                            WordleStreak.id,
+                            WordleStreak.channel_id,
+                            WordleStreak.puzzle_id,
+                        )
+                    )
+                ).all()
+            }
+            claims: set[tuple[int, int]] = set(streaks.values())
+
+            logger.trace(f"{engine=}\n{session=}")
+
+            for id, day, solution in source["wordle_puzzles"]:
+                try:
+                    day = date.fromisoformat(str(day))
+                except ValueError:
+                    day = None
+
+                if (
+                    not isinstance(id, int)
+                    or not isinstance(solution, str)
+                    or not solution
+                    or day != WordleOps.puzzle_day_for_id(id)
+                ):
+                    logger.warning(
+                        f"Skipped invalid WordlePuzzle {id} during database import ({day=}, {solution=})"
+                    )
+
+                    rejected.add(id)
+                    conflicts += 1
+
+                    continue
+
+                if existing := puzzles.get(id):
+                    if existing == (day, solution):
+                        duplicates += 1
+                    else:
+                        logger.warning(
+                            f"Skipped WordlePuzzle {id} during database import, existing puzzle is {existing} but {(day, solution)} was imported"
+                        )
+
+                        rejected.add(id)
+                        conflicts += 1
+
+                    continue
+
+                if day in days:
+                    logger.warning(
+                        f"Skipped WordlePuzzle {id} during database import, day {day} belongs to existing puzzle {days[day]}"
+                    )
+
+                    rejected.add(id)
+                    conflicts += 1
+
+                    continue
+
+                puzzles[id] = (day, solution)
+                days[day] = id
+
+                new_puzzles.append(WordlePuzzle(id=id, day=day, solution=solution))
+
+            for id, attempts, player_id, puzzle_id in source["wordle_results"]:
+                if (
+                    not isinstance(attempts, int)
+                    or not isinstance(player_id, int)
+                    or not isinstance(puzzle_id, int)
+                    or id != f"{player_id}_{puzzle_id}"
+                    or not 1 <= attempts <= 7
+                    or puzzle_id in rejected
+                    or puzzle_id not in puzzles
+                ):
+                    logger.warning(
+                        f"Skipped invalid WordleResult {id} during database import ({attempts=}, {player_id=}, {puzzle_id=})"
+                    )
+
+                    conflicts += 1
+
+                    continue
+
+                if (existing := results.get(id)) is not None:
+                    if existing == attempts:
+                        duplicates += 1
+                    else:
+                        logger.warning(
+                            f"Skipped WordleResult {id} during database import, existing result has {existing} attempts but {attempts} were imported"
+                        )
+
+                        conflicts += 1
+
+                    continue
+
+                if player_id not in players:
+                    players.add(player_id)
+                    new_players.append(Player(id=player_id))
+
+                results[id] = attempts
+
+                new_results.append(
+                    WordleResult(
+                        id=id,
+                        attempts=attempts,
+                        player_id=player_id,
+                        puzzle_id=puzzle_id,
+                    )
+                )
+
+            for id, channel_id, streak, puzzle_id in source["wordle_streaks"]:
+                if (
+                    not isinstance(id, int)
+                    or not isinstance(channel_id, int)
+                    or not isinstance(streak, int)
+                    or not isinstance(puzzle_id, int)
+                    or puzzle_id in rejected
+                    or puzzle_id not in puzzles
+                ):
+                    logger.warning(
+                        f"Skipped invalid WordleStreak {id} during database import ({channel_id=}, {streak=}, {puzzle_id=})"
+                    )
+
+                    conflicts += 1
+
+                    continue
+
+                if (existing := streaks.get(id)) == (channel_id, puzzle_id):
+                    duplicates += 1
+
+                    continue
+                elif existing or (channel_id, puzzle_id) in claims:
+                    logger.warning(
+                        f"Skipped WordleStreak {id} during database import, conflicts with an existing streak for puzzle {puzzle_id} in channel {channel_id}"
+                    )
+
+                    conflicts += 1
+
+                    continue
+
+                streaks[id] = (channel_id, puzzle_id)
+                claims.add((channel_id, puzzle_id))
+
+                new_streaks.append(
+                    WordleStreak(
+                        id=id, channel_id=channel_id, streak=streak, puzzle_id=puzzle_id
+                    )
+                )
+
+            session.add_all([*new_puzzles, *new_players])
+
+            # Ensure referenced records exist before their dependents
+            await session.flush()
+
+            session.add_all([*new_results, *new_streaks])
+
+            await session.commit()
+
+        summary: WordleImportSummary = WordleImportSummary(
+            puzzles=len(new_puzzles),
+            players=len(new_players),
+            results=len(new_results),
+            streaks=len(new_streaks),
+            duplicates=duplicates,
+            conflicts=conflicts,
+        )
+
+        logger.success(f"Imported Wordle data from provided database: {summary}")
+
+        return summary
 
     @staticmethod
     async def get_puzzle(
