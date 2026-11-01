@@ -203,11 +203,14 @@ class WordleStats(NamedTuple):
 async def autocomplete_season(
     data: AutocompleteData[GatewayClient, str],
 ) -> dict[str, str]:
-    """Suggest the seasons containing Wordle puzzles (newest first) and All-Time."""
+    """Suggest All-Time and the seasons containing Wordle puzzles (newest first)."""
     now: date = today()
     first: date = await WordleOps.get_first_puzzle_day(data.client) or now
     query: str = str(data.focused_value or "").strip().lower()
     choices: dict[str, str] = {}
+
+    if query.replace(" ", "-") in "all-time":
+        choices["All-Time"] = SEASON_ALL_TIME
 
     for season in Season.span(min(first, now), now):
         name: str = f"{season.label} ({'Current' if season.contains(now) else season.dates_plain})"
@@ -215,12 +218,7 @@ async def autocomplete_season(
         if query in name.lower() or query in season.key:
             choices[name] = season.key
 
-    choices = dict(list(choices.items())[:24])
-
-    if query.replace(" ", "-") in "all-time":
-        choices["All-Time"] = SEASON_ALL_TIME
-
-    return choices
+    return dict(list(choices.items())[:25])
 
 
 SeasonOption = Option[
