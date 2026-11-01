@@ -354,7 +354,7 @@ async def command_wordle_import(
     if not found:
         await ctx.respond(
             component=Templates.generic(
-                TemplateType.INFO, f"No Wordle data found in {searched:,} messages."
+                TemplateType.INFO, f"No new Wordle data found in {searched:,} messages."
             )
         )
 
@@ -685,7 +685,7 @@ async def command_wordle_import_message(ctx: GatewayContext, msg: Message) -> No
     if not found:
         await ctx.respond(
             component=Templates.generic(
-                TemplateType.INFO, "No valid Wordle data found in the provided message."
+                TemplateType.INFO, "No new Wordle data found in the provided message."
             )
         )
 
@@ -860,24 +860,55 @@ class WordleOps:
 
     @staticmethod
     async def add_result(
-        client: GatewayClient, attempts: int, player_id: int, puzzle_id: int
+        client: GatewayClient,
+        attempts: int,
+        player_id: int,
+        puzzle_id: int,
+        *,
+        authoritative: bool = False,
     ) -> WordleResult | None:
-        """Add a WordleResult for the given Player and WordlePuzzle to the database."""
+        """
+        Add a WordleResult for the given Player and WordlePuzzle to the database.
+
+        An existing result with different attempts is kept, unless the reported result is
+        authoritative (it names its own player and puzzle, like a share message), in which
+        case the existing result is corrected.
+        """
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+
         if result := await WordleOps.get_result(client, player_id, puzzle_id):
-            if result.attempts != attempts:
-                logger.warning(
-                    f"Skipped WordleResult creation for player {player_id} and puzzle {puzzle_id}, existing result has {result.attempts} attempts but {attempts} were reported"
-                )
-            else:
+            if result.attempts == attempts:
                 logger.debug(
                     f"Skipped WordleResult creation, already exists for player {player_id} and puzzle {puzzle_id}"
                 )
+                logger.trace(f"{result=}")
 
-            logger.trace(f"{result=}")
+                return
+            elif not authoritative:
+                logger.warning(
+                    f"Skipped WordleResult creation for player {player_id} and puzzle {puzzle_id}, existing result has {result.attempts} attempts but {attempts} were reported"
+                )
+                logger.trace(f"{result=}")
 
-            return
+                return
 
-        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+            async with AsyncSession(engine) as session:
+                logger.warning(
+                    f"Correcting WordleResult {result.id} from {result.attempts} to {attempts} attempts, the existing result was likely misattributed"
+                )
+                logger.trace(f"{result=}\n{engine=}\n{session=}")
+
+                session.add(result)
+
+                result.attempts = attempts
+
+                await session.commit()
+                await session.refresh(result)
+
+                logger.success(f"Corrected WordleResult {result.id} in database")
+
+                return result
+
         result: WordleResult = WordleResult(
             id=f"{player_id}_{puzzle_id}",
             attempts=attempts,
@@ -2531,8 +2562,11 @@ class WordleOps:
             raise RuntimeError(f"Failed to determine User ID for Wordle share {msg.id}")
 
         player: Player = await Database.get_player(client, user)
+
+        # Late solves are shared a day or more after the puzzle, so derive its day from
+        # the ID rather than the message timestamp
         puzzle: WordlePuzzle | None = await WordleOps.get_puzzle(
-            client, puzzle_id, msg.created_at.date()
+            client, puzzle_id, WordleOps.puzzle_day_for_id(puzzle_id)
         )
 
         if not puzzle:
@@ -2540,7 +2574,10 @@ class WordleOps:
                 f"Cannot import WordleResult {player.id}_{puzzle_id} without puzzle data"
             )
 
-        return await WordleOps.add_result(client, attempts, player.id, puzzle.id)
+        # A share names its own player and puzzle, so it overrides inferred streak data
+        return await WordleOps.add_result(
+            client, attempts, player.id, puzzle.id, authoritative=True
+        )
 
     @staticmethod
     async def get_definition(word: str) -> str | None:
