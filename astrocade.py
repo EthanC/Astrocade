@@ -53,10 +53,7 @@ async def start() -> None:
         logger.add(
             DiscordSink(
                 LOG_DISCORD_WEBHOOK_URL,
-                suppress=[
-                    GatewayConnectionError,
-                    GatewayServerClosedConnectionError,
-                ],
+                suppress=[GatewayConnectionError, GatewayServerClosedConnectionError],
             ),
             level=LOG_DISCORD_WEBHOOK_LEVEL,
             backtrace=False,

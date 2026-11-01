@@ -25,6 +25,8 @@ jobs:
         run: uv sync --dev
       - name: Run ruff
         run: uv run ruff check .
+      - name: Run ruff format
+        run: uv run ruff format --check .
       - name: Log in to GHCR
         uses: docker/login-action@v4.7.0
         with:
