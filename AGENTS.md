@@ -15,13 +15,14 @@ There is no web server, no test suite, and no migration tool.
 | Install deps (incl. dev tools) | `uv sync` |
 | Run the bot | `uv run python -OO astrocade.py` |
 | Lint + autofix (CI-enforced) | `uv run ruff check .` |
-| Type check (advisory) | `uv run ty check .` |
+| Format (CI-enforced via `--check`) | `uv run ruff format .` |
+| Type check | `uv run ty check .` |
 | Build the image | `docker build -t astrocade .` |
 
 - Running locally needs a `.env` in the repo root (copy `.env.example`; variables are documented in the README table). `core/consts.py` loads it at import time. `DISCORD_BOT_TOKEN` is the only variable without a default; importing `core.consts` without it raises. The bot requires the privileged **Message Content** intent on the Discord application.
-- `uv run ruff check .` is the only check CI runs and it must pass. `fix = true` is set, so it rewrites import order and some docstring issues in place; re-read files after running it.
-- `uv run ty check .` currently reports 8 pre-existing diagnostics. Don't add new ones; don't fix the old ones unless asked.
-- `ruff format` is configured (`line-ending = "lf"`) but **not** enforced, and several tracked files are committed with CRLF endings (`astrocade.py`, `core/consts.py`, `core/hooks.py`, `core/templates.py`, `extensions/*.py`; `core/database.py` is mixed). Running `ruff format` on those produces a whole-file line-ending diff. Write code in ruff-format style, preserve each file's existing line endings, and don't normalize line endings as a side effect of another change.
+- CI runs `uv run ruff check .` and `uv run ruff format --check .`; both must pass. `ruff check` has `fix = true`, so it rewrites import order and some docstring issues in place; re-read files after running it.
+- `uv run ty check .` passes with zero diagnostics and must stay that way. It is not run in CI (ty is pre-1.0 and a new release can flag previously clean code), so run it locally before committing. When ty can't resolve a sqlmodel `select()` overload, wrap the columns in `col()`.
+- Line endings are LF everywhere, enforced by `.gitattributes` (`* text=auto eol=lf`) and ruff's `line-ending = "lf"`.
 
 ## Layout
 
@@ -109,5 +110,5 @@ Gitignored runtime files in the repo root: `.env` (real secrets; never print or 
 
 - Work on `main`; there are no feature branches. Don't create one unless asked.
 - Commit messages: `Type(Scope): Imperative summary`, e.g. `Feat(Wordle): Add seasonal wins leaderboard`, `Fix(Logging): Suppress gateway server closed errors from Discord sink`, `Chore(Project): Upgrade dependencies`. Types in use: `Feat`, `Fix`, `Chore`. Scopes in use: `Wordle`, `Admin`, `Core`, `Project`, `CI`, `Docker`, `Logging`, `README`, `Docs`, `Deps`.
-- Every push to `main` runs `.github/workflows/workflow.yaml`: `uv sync --dev`, `ruff check .`, then builds the Alpine image and pushes `ghcr.io/ethanc/astrocade:latest` and `:<sha>`. **A commit on `main` is a release.** The version lives in `pyproject.toml`.
-- Before committing: `uv run ruff check .` passes, `uv run ty check .` shows no new diagnostics, and the bot starts (`uv run python -OO astrocade.py`) if you touched startup, config, or models. There are no automated tests; exercise changed commands in a test guild.
+- Every push to `main` runs `.github/workflows/workflow.yaml`: `uv sync --dev`, `ruff check .`, `ruff format --check .`, then builds the Alpine image and pushes `ghcr.io/ethanc/astrocade:latest` and `:<sha>`. **A commit on `main` is a release.** The version lives in `pyproject.toml`.
+- Before committing: `uv run ruff check .`, `uv run ruff format --check .`, and `uv run ty check .` all pass, and the bot starts (`uv run python -OO astrocade.py`) if you touched startup, config, or models. There are no automated tests; exercise changed commands in a test guild.
