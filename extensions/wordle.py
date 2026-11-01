@@ -5,11 +5,12 @@ from asyncio import sleep, to_thread
 from datetime import date, datetime, timedelta
 from operator import pos
 from re import Match, Pattern
-from typing import Any, Final, Sequence
+from typing import Any, Final, NamedTuple, Sequence
 
 import arc
 import niquests
 from arc import (
+    AutocompleteData,
     AutodeferMode,
     ChannelParams,
     GatewayClient,
@@ -52,7 +53,10 @@ from hikari.impl import (
 from hikari.messages import MessageReferenceType
 from loguru import logger
 from niquests.models import Response
+from sqlalchemy import ColumnElement, Integer, case, true
+from sqlalchemy.orm import Mapped
 from sqlmodel import col, func
+from sqlmodel.sql.expression import Select
 
 from core.consts import (
     ASTROCADE_LOGO,
@@ -82,6 +86,7 @@ from core.database import (
 from core.hooks import Hooks
 from core.models import Player, WordlePuzzle, WordleResult, WordleStreak
 from core.ocr import OCR
+from core.seasons import Season, season_caption, season_label, today
 from core.templates import Templates, TemplateType, percentage
 
 plugin: GatewayPluginBase = GatewayPluginBase("wordle")
@@ -90,6 +95,94 @@ group: SlashGroup = plugin.include_slash_group(
     "Commands to interact with Wordle, the daily word game.",
     autodefer=AutodeferMode.ON,  # All commands require database and/or API access
 )
+
+SEASON_ALL_TIME: Final[str] = "all"
+"""Season option value that selects stats across all seasons."""
+
+LEADERBOARDS: Final[dict[WordleLeaderboardType, tuple[str, str, str]]] = {
+    WordleLeaderboardType.POINTS: ("Wordle Points Leaderboard", "points", "points"),
+    WordleLeaderboardType.POINTS_GROSS: (
+        "Wordle Gross Points Leaderboard",
+        "points_gross",
+        "points",
+    ),
+    WordleLeaderboardType.AVERAGES: (
+        "Wordle Average Leaderboard",
+        "average_attempts",
+        "attempts",
+    ),
+    WordleLeaderboardType.FAILS: ("Wordle Loserboard", "fails", "fails"),
+    WordleLeaderboardType.ACES: ("Wordle Aces Leaderboard", "aces", "aces"),
+    WordleLeaderboardType.COMPLETIONS: (
+        "Wordle Completions Leaderboard",
+        "completions",
+        "completions",
+    ),
+}
+"""Leaderboard categories as (title, WordleStats field, unit)."""
+
+
+class InvalidSeasonError(Exception):
+    """Raised when a season option value does not identify a season."""
+
+
+class WordleStats(NamedTuple):
+    """Wordle statistics accumulated by a player over a season."""
+
+    player_id: int
+    """Discord User ID of the player."""
+
+    points: int
+    """Total Wordle points, including deductions for fails."""
+
+    points_gross: int
+    """Total Wordle points, excluding deductions for fails."""
+
+    average_attempts: int
+    """Average attempts across non-failed Wordle games."""
+
+    completions: int
+    """Total Wordle games played, including fails."""
+
+    fails: int
+    """Total failed Wordle games."""
+
+    aces: int
+    """Total Wordle games solved in 1 attempt."""
+
+
+async def autocomplete_season(
+    data: AutocompleteData[GatewayClient, str],
+) -> dict[str, str]:
+    """Suggest the seasons containing Wordle puzzles (newest first) and All-Time."""
+    now: date = today()
+    first: date = await WordleOps.get_first_puzzle_day(data.client) or now
+    query: str = str(data.focused_value or "").strip().lower()
+    choices: dict[str, str] = {}
+
+    for season in Season.span(min(first, now), now):
+        name: str = (
+            f"{season.label} ({'Current' if season.contains(now) else season.dates})"
+        )
+
+        if query in name.lower() or query in season.key:
+            choices[name] = season.key
+
+    choices = dict(list(choices.items())[:24])
+
+    if query.replace(" ", "-") in "all-time":
+        choices["All-Time"] = SEASON_ALL_TIME
+
+    return choices
+
+
+SeasonOption = Option[
+    str | None,
+    StrParams(
+        "Season to view. Defaults to the current season.",
+        autocomplete_with=autocomplete_season,
+    ),
+]
 
 
 @arc.loader
@@ -197,30 +290,36 @@ async def command_wordle_stats(
         User | None,
         UserParams("User to get Wordle statistics for. Defaults to yourself."),
     ] = None,
+    season: SeasonOption = None,
 ) -> None:
     """Handle the /wordle stats command."""
     if not user:
         user = ctx.author
 
-    player = await Database.get_player(ctx.client, user.id)
+    selected: Season | None = WordleOps.resolve_season(season)
+    player: WordleStats | None = await WordleOps.get_player_stats(
+        ctx.client, user.id, selected
+    )
 
-    if not player.wordle_points_gross:
+    if not player:
         await ctx.respond(
             component=Templates.generic(
-                TemplateType.INFO, "No Wordle statistics found for this player."
+                TemplateType.INFO,
+                f"No {season_label(selected)} Wordle statistics found for this player.",
             )
         )
 
         return
 
-    total_puzzles: int = await WordleOps.count_puzzles(ctx.client)
-    completions: int = player.wordle_completions
-    fails: int = player.wordle_fails
-    aces: int = player.wordle_aces
+    total_puzzles: int = await WordleOps.count_puzzles(ctx.client, selected)
+    completions: int = player.completions
+    fails: int = player.fails
+    aces: int = player.aces
 
-    stats: str = f"## Wordle Statistics for <@{player.id}>"
-    stats += f"\n* Points: **{player.wordle_points:,}** ({player.wordle_points_gross:,} gross)"
-    stats += f"\n* Average: **{player.wordle_average_attempts:,}**"
+    stats: str = f"## Wordle Statistics for <@{player.player_id}>"
+    stats += f"\n-# {season_caption(selected)}"
+    stats += f"\n* Points: **{player.points:,}** ({player.points_gross:,} gross)"
+    stats += f"\n* Average: **{player.average_attempts:,}**"
     stats += f"\n* Completions: **{completions:,}** of {total_puzzles:,} ({percentage(completions, total_puzzles):,}%)"
     stats += f"\n* Fails: **{fails:,}** of {total_puzzles:,} ({percentage(fails, total_puzzles):,}%) | {WordlePoints.FAIL * fails:,} points"
     stats += f"\n* Aces: **{aces:,}** of {total_puzzles:,} ({percentage(aces, total_puzzles):,}%) | {WordlePoints.ATTEMPTS_1 * aces:,} points"
@@ -261,6 +360,7 @@ async def command_wordle_history(
             max=6,
         ),
     ] = None,
+    season: SeasonOption = None,
 ) -> None:
     """Handle the /wordle history command."""
     if min_attempts and max_attempts:
@@ -277,21 +377,30 @@ async def command_wordle_history(
     if not user:
         user = ctx.author
 
+    selected: Season | None = WordleOps.resolve_season(season)
     player: Player = await Database.get_player(ctx.client, user.id)
+    results: list[WordleResult] = sorted(
+        (
+            result
+            for result in player.wordle_results
+            if not selected or selected.contains(result.puzzle_day)
+        ),
+        key=lambda r: r.puzzle_id,
+        reverse=True,
+    )
 
-    if not player.wordle_results:
+    if not results:
         await ctx.respond(
             component=Templates.generic(
-                TemplateType.INFO, f"Player {user.mention} has no Wordle history."
+                TemplateType.INFO,
+                f"Player {user.mention} has no {season_label(selected)} Wordle history.",
             )
         )
 
         return
 
     history: str = f"## Wordle History for {user.mention}"
-    results: list[WordleResult] = sorted(
-        player.wordle_results, key=lambda r: r.puzzle_id, reverse=True
-    )
+    history += f"\n-# {season_caption(selected)}"
     current: int = 0
 
     for result in results:
@@ -364,6 +473,7 @@ async def command_wordle_leaderboard(
             ],
         ),
     ] = WordleLeaderboardType.POINTS,
+    season: SeasonOption = None,
     limit: Option[
         int,
         IntParams(
@@ -384,7 +494,10 @@ async def command_wordle_leaderboard(
     """Handle the /wordle leaderboard command."""
     await ctx.respond(
         component=await WordleOps.get_leaderboard_message(
-            WordleLeaderboardType(category), limit, direction
+            WordleLeaderboardType(category),
+            limit,
+            direction,
+            WordleOps.resolve_season(season),
         )
     )
 
@@ -400,7 +513,11 @@ async def command_wordle_help(ctx: GatewayContext) -> None:
     puzzles: int = await WordleOps.count_puzzles(ctx.client)
     completions: int = await WordleOps.count_results(ctx.client)
 
-    stats: str = f"-# Tracking **{players:,}** players over **{puzzles:,}** puzzles with **{completions:,}** completions.\n"
+    season: Season = Season.current()
+    remaining: int = season.days_remaining()
+
+    stats: str = f"-# Tracking **{players:,}** players over **{puzzles:,}** puzzles with **{completions:,}** completions."
+    stats += f"\n-# **{season.label}** runs {season.dates} · **{remaining:,}** day{'' if remaining == 1 else 's'} remaining.\n"
 
     rules: str = f"1 Attempt: **{WordlePoints.ATTEMPTS_1:,}** points"
     rules += f"\n2 Attempts: **{WordlePoints.ATTEMPTS_2:,}** points"
@@ -561,31 +678,35 @@ async def command_wordle_missing(
             "Number of missing puzzles to fetch. Defaults to 25.", min=1, max=100
         ),
     ] = 25,
+    season: SeasonOption = None,
 ) -> None:
     """Handle the /wordle missing command."""
     if not user:
         user = ctx.author
 
-    total: int = await WordleOps.count_puzzles(ctx.client)
-    missing: int = await WordleOps.count_missing_puzzles(ctx.client, user.id)
+    selected: Season | None = WordleOps.resolve_season(season)
+    label: str = season_label(selected)
+    total: int = await WordleOps.count_puzzles(ctx.client, selected)
+    missing: int = await WordleOps.count_missing_puzzles(ctx.client, user.id, selected)
 
     if not missing:
         await ctx.respond(
             component=Templates.generic(
                 TemplateType.INFO,
-                f"Player {user.mention} is not missing any Wordle puzzle completions."
+                f"Player {user.mention} is not missing any {label} Wordle puzzle completions."
                 if total
-                else "There are no Wordle puzzles to be missing completion yet.",
+                else f"There are no {label} Wordle puzzles to be missing completion yet.",
             )
         )
 
         return
 
     puzzles: list[WordlePuzzle] = await WordleOps.get_missing_puzzles(
-        ctx.client, user.id, limit
+        ctx.client, user.id, limit, selected
     )
 
     result: str = f"## Missing Wordle Puzzle Completions"
+    result += f"\n-# {season_caption(selected)}"
     result += f"\n-# {user.mention} is missing **{missing:,}** of {total:,} completions ({percentage(missing, total):,}%)."
 
     for puzzle in puzzles:
@@ -610,6 +731,16 @@ async def event_wordle_message(event: GuildMessageCreateEvent) -> None:
 @plugin.set_error_handler
 async def error_handler(ctx: GatewayContext, error: Exception) -> None:
     """Handle errors originating from this plugin."""
+    if isinstance(error, InvalidSeasonError):
+        await ctx.respond(
+            component=Templates.generic(
+                TemplateType.ERROR,
+                f"Unknown season `{error}`. Choose a season from the list.",
+            )
+        )
+
+        return
+
     await Hooks.command_error(ctx, error)
 
 
@@ -852,266 +983,158 @@ class WordleOps:
             return puzzle
 
     @staticmethod
-    async def get_leaderboard_message(
-        category: WordleLeaderboardType, limit: int, direction: str
-    ) -> ContainerComponentBuilder:
-        """Get the formatted leaderboard message for the provided players."""
-        players: list[Player] = []
-        title: str = "Wordle Leaderboard"
+    def resolve_season(value: str | None) -> Season | None:
+        """Resolve a season option value. Defaults to the current season, None is All-Time."""
+        if value is None:
+            return Season.current()
+        elif value.strip().lower() in (SEASON_ALL_TIME, "all-time", "all time"):
+            return None
+        elif season := Season.parse(value):
+            return season
 
-        match category:
-            case WordleLeaderboardType.POINTS:
-                title = "Wordle Points Leaderboard"
-                players = await WordleOps.get_leaderboard_points(
-                    plugin.client, limit, direction
+        raise InvalidSeasonError(value)
+
+    @staticmethod
+    def _season_filter(season: Season | None) -> ColumnElement[bool]:
+        """Return a clause matching the WordlePuzzles within the given season. None is All-Time."""
+        if not season:
+            return true()
+
+        return col(WordlePuzzle.day).between(season.start, season.end)
+
+    @staticmethod
+    def _stats_statement(season: Season | None) -> Select[*tuple[Any, ...]]:
+        """Build a query of WordleStats per Player for the given season. None is All-Time."""
+        attempts: Mapped[int] = col(WordleResult.attempts)
+        points: dict[int, int] = {
+            1: WordlePoints.ATTEMPTS_1,
+            2: WordlePoints.ATTEMPTS_2,
+            3: WordlePoints.ATTEMPTS_3,
+            4: WordlePoints.ATTEMPTS_4,
+            5: WordlePoints.ATTEMPTS_5,
+            6: WordlePoints.ATTEMPTS_6,
+        }
+
+        # sqlmodel's select() is only typed for up to 4 columns
+        return (
+            Select(
+                col(WordleResult.player_id),
+                func.sum(case(points, value=attempts, else_=WordlePoints.FAIL)).label(
+                    "points"
+                ),
+                func.sum(case(points, value=attempts, else_=0)).label("points_gross"),
+                # Fails are excluded from the average as NULL
+                func.coalesce(func.round(func.avg(case((attempts != 7, attempts)))), 0)
+                .cast(Integer)
+                .label("average_attempts"),
+                func.count().label("completions"),
+                func.sum(case((attempts == 7, 1), else_=0)).label("fails"),
+                func.sum(case((attempts == 1, 1), else_=0)).label("aces"),
+            )
+            .join(WordlePuzzle, col(WordlePuzzle.id) == col(WordleResult.puzzle_id))
+            .where(WordleOps._season_filter(season))
+            .group_by(col(WordleResult.player_id))
+        )
+
+    @staticmethod
+    async def get_player_stats(
+        client: GatewayClient, player_id: int, season: Season | None
+    ) -> WordleStats | None:
+        """Get the WordleStats of the given Player for the given season. None is All-Time."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+
+        async with AsyncSession(engine) as session:
+            statement: Select[*tuple[Any, ...]] = WordleOps._stats_statement(
+                season
+            ).where(col(WordleResult.player_id) == player_id)
+
+            logger.debug(
+                f"Find {season_label(season)} WordleStats for player {player_id}"
+            )
+            logger.trace(f"{statement=}\n{engine=}\n{session=}")
+
+            row: Any = (await session.exec(statement)).first()
+
+            return WordleStats._make(row) if row else None
+
+    @staticmethod
+    async def get_leaderboard(
+        client: GatewayClient,
+        category: WordleLeaderboardType,
+        season: Season | None,
+        limit: int,
+        direction: str,
+    ) -> list[WordleStats]:
+        """Get the top Players' WordleStats for the given season, ordered by the given category."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+        statement: Select[*tuple[Any, ...]] = WordleOps._stats_statement(season)
+        stats = statement.selected_columns
+        primary: ColumnElement[int] = stats[LEADERBOARDS[category][1]]
+
+        # Columns to order by, and whether each is ordered opposite to the direction
+        order: list[tuple[ColumnElement[int], bool]] = [(primary, False)]
+
+        if category == WordleLeaderboardType.POINTS:
+            # Tiebreakers: Gross Points -> Average Attempts
+            order += [(stats.points_gross, False), (stats.average_attempts, True)]
+
+        ascending: bool = direction == Direction.ASCENDING
+        statement = (
+            statement.having(
+                primary != 0
+                if category == WordleLeaderboardType.POINTS
+                else primary > 0
+            )
+            .order_by(
+                *(
+                    column.asc() if ascending != inverted else column.desc()
+                    for column, inverted in order
                 )
-            case WordleLeaderboardType.POINTS_GROSS:
-                title = "Wordle Gross Points Leaderboard"
-                players = await WordleOps.get_leaderboard_points_gross(
-                    plugin.client, limit, direction
-                )
-            case WordleLeaderboardType.AVERAGES:
-                title = "Wordle Average Leaderboard"
-                players = await WordleOps.get_leaderboard_average(
-                    plugin.client, limit, direction
-                )
-            case WordleLeaderboardType.FAILS:
-                title = "Wordle Loserboard"
-                players = await WordleOps.get_leaderboard_fails(
-                    plugin.client, limit, direction
-                )
-            case WordleLeaderboardType.ACES:
-                title = "Wordle Aces Leaderboard"
-                players = await WordleOps.get_leaderboard_aces(
-                    plugin.client, limit, direction
-                )
-            case WordleLeaderboardType.COMPLETIONS:
-                title = "Wordle Completions Leaderboard"
-                players = await WordleOps.get_leaderboard_completions(
-                    plugin.client, limit, direction
-                )
-            case _:
-                raise RuntimeError(f"Unexpected leaderboard category {category}")
+            )
+            .limit(limit)
+        )
+
+        async with AsyncSession(engine) as session:
+            logger.trace(f"{statement=}\n{engine=}\n{session=}")
+
+            results: Sequence[Any] = (await session.exec(statement)).all()
+            players: list[WordleStats] = [WordleStats._make(row) for row in results]
+
+            logger.debug(
+                f"Found {len(players):,} players for {season_label(season)} Wordle {category} leaderboard"
+            )
+            logger.trace(f"{players=}")
+
+            return players
+
+    @staticmethod
+    async def get_leaderboard_message(
+        category: WordleLeaderboardType,
+        limit: int,
+        direction: str,
+        season: Season | None,
+    ) -> ContainerComponentBuilder:
+        """Get the formatted leaderboard message for the given category and season."""
+        title, field, unit = LEADERBOARDS[category]
+        players: list[WordleStats] = await WordleOps.get_leaderboard(
+            plugin.client, category, season, limit, direction
+        )
 
         if not players:
             return Templates.generic(
                 TemplateType.INFO,
-                f"Not enough player data available to populate the leaderboard.",
+                f"Not enough player data available to populate the {season_label(season)} leaderboard.",
             )
 
         board: str = f"## {title}"
-        pos: int = 1
+        board += f"\n-# {season_caption(season)}"
 
-        for player in players:
-            placement: str = f"???"
-
-            match category:
-                case WordleLeaderboardType.POINTS:
-                    placement = f"**{player.wordle_points:,}** points"
-                case WordleLeaderboardType.POINTS_GROSS:
-                    placement = f"**{player.wordle_points_gross:,}** points"
-                case WordleLeaderboardType.AVERAGES:
-                    placement = f"**{player.wordle_average_attempts:,}** attempts"
-                case WordleLeaderboardType.FAILS:
-                    placement = f"**{player.wordle_fails:,}** fails"
-                case WordleLeaderboardType.ACES:
-                    placement = f"**{player.wordle_aces:,}** aces"
-                case WordleLeaderboardType.COMPLETIONS:
-                    placement = f"**{player.wordle_completions:,}** completions"
-                case _:
-                    raise RuntimeError(f"Unexpected leaderboard category {category}")
-
-            board += f"\n{pos}. <@{player.id}>: {placement}"
-            pos += 1
+        for pos, player in enumerate(players, start=1):
+            board += (
+                f"\n{pos}. <@{player.player_id}>: **{getattr(player, field):,}** {unit}"
+            )
 
         return Templates.generic_thumb(TemplateType.SUCCESS, board, WORDLE_ICON)
-
-    @staticmethod
-    async def get_leaderboard_points(
-        client: GatewayClient, limit: int, direction: str
-    ) -> list[Player]:
-        """Get the top Players ordered by their accumulated Wordle points."""
-        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
-        players: list[Player] = []
-
-        async with AsyncSession(engine) as session:
-            statement: SelectOfScalar[Player] = (
-                select(Player)
-                .where(Player.wordle_points != 0)
-                .order_by(
-                    # Tiebreakers: Gross Points -> Average Attempts
-                    *(
-                        (
-                            Player.wordle_points.asc(),
-                            Player.wordle_points_gross.asc(),
-                            Player.wordle_average_attempts.desc(),
-                        )
-                        if direction == Direction.ASCENDING
-                        else (
-                            Player.wordle_points.desc(),
-                            Player.wordle_points_gross.desc(),
-                            Player.wordle_average_attempts.asc(),
-                        )
-                    )
-                )
-                .limit(limit)
-            )
-
-            results: ScalarResult[Player] = await session.exec(statement)
-            players = list(results.all())
-
-            logger.debug(
-                f"Found {len(players):,} players for Wordle points leaderboard"
-            )
-            logger.trace(f"{players=}")
-
-            return players
-
-    @staticmethod
-    async def get_leaderboard_points_gross(
-        client: GatewayClient, limit: int, direction: str
-    ) -> list[Player]:
-        """Get the top Players ordered by their grossed Wordle points."""
-        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
-        players: list[Player] = []
-
-        async with AsyncSession(engine) as session:
-            statement: SelectOfScalar[Player] = (
-                select(Player)
-                .where(Player.wordle_points_gross > 0)
-                .order_by(
-                    Player.wordle_points_gross.asc()
-                    if direction == Direction.ASCENDING
-                    else Player.wordle_points_gross.desc()
-                )
-                .limit(limit)
-            )
-
-            results: ScalarResult[Player] = await session.exec(statement)
-            players = list(results.all())
-
-            logger.debug(
-                f"Found {len(players):,} players for Wordle gross points leaderboard"
-            )
-            logger.trace(f"{players=}")
-
-            return players
-
-    @staticmethod
-    async def get_leaderboard_average(
-        client: GatewayClient, limit: int, direction: str
-    ) -> list[Player]:
-        """Get the top Players ordered by their Wordle average attempts."""
-        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
-        players: list[Player] = []
-
-        async with AsyncSession(engine) as session:
-            statement: SelectOfScalar[Player] = (
-                select(Player)
-                .where(Player.wordle_average_attempts > 0)
-                .order_by(
-                    Player.wordle_average_attempts.asc()
-                    if direction == Direction.ASCENDING
-                    else Player.wordle_average_attempts.desc()
-                )
-                .limit(limit)
-            )
-
-            results: ScalarResult[Player] = await session.exec(statement)
-            players = list(results.all())
-
-            logger.debug(
-                f"Found {len(players):,} players for Wordle average attempts leaderboard"
-            )
-            logger.trace(f"{players=}")
-
-            return players
-
-    @staticmethod
-    async def get_leaderboard_fails(
-        client: GatewayClient, limit: int, direction: str
-    ) -> list[Player]:
-        """Get the top Players ordered by their accumulated Wordle fails."""
-        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
-        players: list[Player] = []
-
-        async with AsyncSession(engine) as session:
-            statement: SelectOfScalar[Player] = (
-                select(Player)
-                .where(Player.wordle_fails > 0)
-                .order_by(
-                    Player.wordle_fails.asc()
-                    if direction == Direction.ASCENDING
-                    else Player.wordle_fails.desc()
-                )
-                .limit(limit)
-            )
-
-            results: ScalarResult[Player] = await session.exec(statement)
-            players = list(results.all())
-
-            logger.debug(f"Found {len(players):,} players for Wordle fails leaderboard")
-            logger.trace(f"{players=}")
-
-            return players
-
-    @staticmethod
-    async def get_leaderboard_aces(
-        client: GatewayClient, limit: int, direction: str
-    ) -> list[Player]:
-        """Get the top Players ordered by their accumulated Wordle aces."""
-        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
-        players: list[Player] = []
-
-        async with AsyncSession(engine) as session:
-            statement: SelectOfScalar[Player] = (
-                select(Player)
-                .where(Player.wordle_aces > 0)
-                .order_by(
-                    Player.wordle_aces.asc()
-                    if direction == Direction.ASCENDING
-                    else Player.wordle_aces.desc()
-                )
-                .limit(limit)
-            )
-
-            results: ScalarResult[Player] = await session.exec(statement)
-            players = list(results.all())
-
-            logger.debug(f"Found {len(players):,} players for Wordle aces leaderboard")
-            logger.trace(f"{players=}")
-
-            return players
-
-    @staticmethod
-    async def get_leaderboard_completions(
-        client: GatewayClient, limit: int, direction: str
-    ) -> list[Player]:
-        """Get the top Players ordered by their accumulated Wordle completions."""
-        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
-        players: list[Player] = []
-
-        async with AsyncSession(engine) as session:
-            statement: SelectOfScalar[Player] = (
-                select(Player)
-                .where(Player.wordle_completions > 0)
-                .order_by(
-                    Player.wordle_completions.asc()
-                    if direction == Direction.ASCENDING
-                    else Player.wordle_completions.desc()
-                )
-                .limit(limit)
-            )
-
-            results: ScalarResult[Player] = await session.exec(statement)
-            players = list(results.all())
-
-            logger.debug(
-                f"Found {len(players):,} players for Wordle completions leaderboard"
-            )
-            logger.trace(f"{players=}")
-
-            return players
 
     @staticmethod
     async def count_results(client: GatewayClient) -> int:
@@ -1134,16 +1157,18 @@ class WordleOps:
             return count
 
     @staticmethod
-    async def count_puzzles(client: GatewayClient) -> int:
-        """Count the number of WordlePuzzles in the Astrocade database."""
+    async def count_puzzles(client: GatewayClient, season: Season | None = None) -> int:
+        """Count the number of WordlePuzzles in the given season. None is All-Time."""
         engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
 
         async with AsyncSession(engine) as session:
-            statement: SelectOfScalar[int] = select(func.count()).select_from(
-                WordlePuzzle
+            statement: SelectOfScalar[int] = (
+                select(func.count())
+                .select_from(WordlePuzzle)
+                .where(WordleOps._season_filter(season))
             )
 
-            logger.debug("Counting WordlePuzzles in database")
+            logger.debug(f"Counting {season_label(season)} WordlePuzzles in database")
             logger.trace(f"{statement=}\n{engine=}\n{session=}")
 
             results: ScalarResult[int] = await session.exec(statement)
@@ -1154,8 +1179,26 @@ class WordleOps:
             return count
 
     @staticmethod
-    async def count_missing_puzzles(client: GatewayClient, player_id: int) -> int:
-        """Count the WordlePuzzles the given Player has not completed."""
+    async def get_first_puzzle_day(client: GatewayClient) -> date | None:
+        """Get the day of the earliest WordlePuzzle in the Astrocade database."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+
+        async with AsyncSession(engine) as session:
+            statement: SelectOfScalar[date | None] = select(
+                func.min(col(WordlePuzzle.day))
+            )
+
+            logger.trace(f"{statement=}\n{engine=}\n{session=}")
+
+            results: ScalarResult[date | None] = await session.exec(statement)
+
+            return results.one()
+
+    @staticmethod
+    async def count_missing_puzzles(
+        client: GatewayClient, player_id: int, season: Season | None = None
+    ) -> int:
+        """Count the WordlePuzzles in the given season the given Player has not completed. None is All-Time."""
         engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
 
         async with AsyncSession(engine) as session:
@@ -1169,6 +1212,7 @@ class WordleOps:
                         )
                     )
                 )
+                .where(WordleOps._season_filter(season))
             )
 
             logger.debug(
@@ -1185,9 +1229,9 @@ class WordleOps:
 
     @staticmethod
     async def get_missing_puzzles(
-        client: GatewayClient, player_id: int, limit: int
+        client: GatewayClient, player_id: int, limit: int, season: Season | None = None
     ) -> list[WordlePuzzle]:
-        """Get the WordlePuzzles the given Player has not completed, most recent first."""
+        """Get the WordlePuzzles in the given season the given Player has not completed, most recent first. None is All-Time."""
         engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
         puzzles: list[WordlePuzzle] = []
 
@@ -1201,6 +1245,7 @@ class WordleOps:
                         )
                     )
                 )
+                .where(WordleOps._season_filter(season))
                 .order_by(col(WordlePuzzle.id).desc())
                 .limit(limit)
             )
@@ -1447,7 +1492,11 @@ class WordleOps:
             await client.rest.create_message(
                 msg.channel_id,
                 component=await WordleOps.get_leaderboard_message(
-                    WordleLeaderboardType.POINTS, 10, Direction.DESCENDING
+                    WordleLeaderboardType.POINTS,
+                    10,
+                    Direction.DESCENDING,
+                    # Streaks report yesterday's results, which may close out a season
+                    Season.for_day(puzzle.day),
                 ),
                 reply=msg.id,
             )
@@ -1627,7 +1676,9 @@ class WordleOps:
                 logger.warning(
                     f"Attributed Wordle streak message {msg.id} to puzzle {puzzle_id} (from {source}), verify this is correct"
                 )
-                logger.debug(f"{rejected=} {created=} {streak=} {preceding=} {following=}")
+                logger.debug(
+                    f"{rejected=} {created=} {streak=} {preceding=} {following=}"
+                )
 
             return puzzle_id
 

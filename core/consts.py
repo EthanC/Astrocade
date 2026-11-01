@@ -8,7 +8,7 @@ from re import Pattern
 from typing import Final
 from zoneinfo import ZoneInfo
 
-from environs import env
+from environs import env, validate
 from loguru import logger
 
 if env.read_env(Path(__file__).resolve().parent.parent / ".env", recurse=False):
@@ -40,6 +40,7 @@ class Environment(StrEnum):
     WORDLE_POINTS_ATTEMPTS_5 = auto()
     WORDLE_POINTS_ATTEMPTS_6 = auto()
     WORDLE_POINTS_FAIL = auto()
+    WORDLE_SEASONS_PER_YEAR = auto()
     DICTIONARY_API_KEY = auto()
     TZ = auto()
 
@@ -122,6 +123,13 @@ REGEX_WORDLE_STREAK_TAG: Final[Pattern[str]] = re.compile(r"<@(\w+)>|@(\w+)")
 REGEX_WORDLE_SHARE: Final[Pattern[str]] = re.compile(r"Wordle\s+(\d+)\s+([0-6X])/6")
 WORDLE_CUTOFF_HOUR: Final[int] = env.int(Environment.WORDLE_CUTOFF_HOUR, 3)
 WORDLE_EPOCH: Final[date] = date(2021, 6, 19)  # Day of Wordle puzzle 0
+WORDLE_SEASONS_PER_YEAR: Final[int] = env.int(
+    Environment.WORDLE_SEASONS_PER_YEAR,
+    4,
+    validate=validate.OneOf(
+        [1, 2, 3, 4, 6, 12], error="Must be one of 1, 2, 3, 4, 6, or 12"
+    ),
+)
 MAX_RESULTS_IMAGE_BYTES: Final[int] = 5 * 1024 * 1024
 WORDLE_ICON: Final[Path] = (
     Path(__file__).resolve().parent.parent / "assets" / "wordle_icon.png"

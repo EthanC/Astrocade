@@ -7,7 +7,7 @@ Astrocade is a Discord Bot that enhances the Discord Activities experience.
 
 ## Features
 
-- [Wordle](https://discord.com/discovery/applications/1211781489931452447) stat tracking, history, and leaderboards.
+- [Wordle](https://discord.com/discovery/applications/1211781489931452447) stat tracking, history, and seasonal leaderboards.
 
 ![Wordle Commands](/assets/astrocade_readme_wordle.png)
 
@@ -81,6 +81,7 @@ All configuration is managed through environment variables on the system hosting
 | `WORDLE_POINTS_ATTEMPTS_5`      | Number of points awarded for a Wordle puzzle completion in 5 attempts.                                                                  | `2`                   |
 | `WORDLE_POINTS_ATTEMPTS_6`      | Number of points awarded for a Wordle puzzle completion in 6 attempts.                                                                  | `1`                   |
 | `WORDLE_POINTS_FAIL`            | Number of points deducted for a failed Wordle puzzle completion.                                                                        | `-5`                  |
+| `WORDLE_SEASONS_PER_YEAR`       | Number of Wordle seasons per year, starting January 1. Player stats reset each season. Must be `1`, `2`, `3`, `4`, `6`, or `12`.        | `4`                   |
 | `DICTIONARY_API_KEY`            | Free API Key for the [Merriam-Webster Collegiate Dictionary](https://dictionaryapi.com/).                                               | N/A                   |
 | `TZ`                            | [IANA](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) time zone key for the host machine time zone.                      | `UTC`                 |
 
