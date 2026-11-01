@@ -29,8 +29,11 @@ from hikari import (
     Activity,
     ActivityType,
     Attachment,
+    ButtonStyle,
     CommandChoice,
     CommandInteractionMetadata,
+    ComponentInteraction,
+    ComponentInteractionCreateEvent,
     ContainerComponent,
     GuildMessageCreateEvent,
     GuildTextChannel,
@@ -39,12 +42,14 @@ from hikari import (
     MessageReference,
     PartialChannel,
     Permissions,
+    ResponseType,
     Snowflake,
     SpacingType,
     Status,
     TextDisplayComponent,
     User,
 )
+from hikari.api import ComponentBuilder
 from hikari.impl import (
     ContainerComponentBuilder,
     LinkButtonBuilder,
@@ -108,6 +113,9 @@ group: SlashGroup = plugin.include_slash_group(
 
 SEASON_ALL_TIME: Final[str] = "all"
 """Season option value that selects stats across all seasons."""
+
+SEASON_PAGE_PREFIX: Final[str] = "wordle_season"
+"""Custom ID prefix of the buttons that page command output between seasons."""
 
 LEADERBOARDS: Final[dict[WordleLeaderboardType, tuple[str, str, str]]] = {
     WordleLeaderboardType.POINTS: ("Wordle Points Leaderboard", "points", "points"),
@@ -380,35 +388,15 @@ async def command_wordle_stats(
         user = ctx.author
 
     selected: Season | None = WordleOps.resolve_season(season)
-    player: WordleStats | None = await WordleOps.get_player_stats(
-        ctx.client, user.id, selected
-    )
-
-    if not player:
-        await ctx.respond(
-            component=Templates.generic(
-                TemplateType.INFO,
-                f"No {season_label(selected)} Wordle statistics found for this player.",
-            )
-        )
-
-        return
-
-    total_puzzles: int = await WordleOps.count_puzzles(ctx.client, selected)
-    completions: int = player.completions
-    fails: int = player.fails
-    aces: int = player.aces
-
-    stats: str = f"## Wordle Statistics for <@{player.player_id}>"
-    stats += f"\n-# {season_caption(selected)}"
-    stats += f"\n* Points: **{player.points:,}** ({player.points_gross:,} gross)"
-    stats += f"\n* Average: **{player.average_attempts:,}**"
-    stats += f"\n* Completions: **{completions:,}** of {total_puzzles:,} ({percentage(completions, total_puzzles):,}%)"
-    stats += f"\n* Fails: **{fails:,}** of {total_puzzles:,} ({percentage(fails, total_puzzles):,}%) | {WordlePoints.FAIL * fails:,} points"
-    stats += f"\n* Aces: **{aces:,}** of {total_puzzles:,} ({percentage(aces, total_puzzles):,}%) | {WordlePoints.ATTEMPTS_1 * aces:,} points"
 
     await ctx.respond(
-        component=Templates.generic_thumb(TemplateType.SUCCESS, stats, WORDLE_ICON)
+        components=await WordleOps.with_season_pages(
+            ctx.client,
+            await WordleOps.get_stats_message(ctx.client, user.id, selected),
+            "stats",
+            selected,
+            user.id,
+        )
     )
 
 
@@ -461,61 +449,20 @@ async def command_wordle_history(
         user = ctx.author
 
     selected: Season | None = WordleOps.resolve_season(season)
-    player: Player = await Database.get_player(ctx.client, user.id)
-    results: list[WordleResult] = sorted(
-        (
-            result
-            for result in player.wordle_results
-            if not selected or selected.contains(result.puzzle_day)
-        ),
-        key=lambda r: r.puzzle_id,
-        reverse=True,
-    )
-
-    if not results:
-        await ctx.respond(
-            component=Templates.generic(
-                TemplateType.INFO,
-                f"Player {user.mention} has no {season_label(selected)} Wordle history.",
-            )
-        )
-
-        return
-
-    history: str = f"## Wordle History for {user.mention}"
-    history += f"\n-# {season_caption(selected)}"
-    current: int = 0
-
-    for result in results:
-        attempts: int = result.attempts
-
-        if min_attempts and (attempts < min_attempts):
-            logger.debug(f"Skipped result {result.id}, attempts below minimum")
-            logger.trace(f"{result=}")
-
-            continue
-        elif max_attempts and (attempts > max_attempts):
-            logger.debug(f"Skipped result {result.id}, attempts below minimum")
-            logger.trace(f"{result=}")
-
-            continue
-
-        puzzle_id: int = result.puzzle_id
-        solution: str = result.puzzle_solution
-        score: str = "X" if attempts == 7 else f"{attempts:,}"
-        points: int = await WordleOps.get_points(attempts)
-
-        history += (
-            f"\n* `{puzzle_id}` ||**`{solution}`**||: **{score}**/6 ({points:,} points)"
-        )
-
-        current += 1
-
-        if limit and current >= limit:
-            break
 
     await ctx.respond(
-        component=Templates.generic_thumb(TemplateType.SUCCESS, history, WORDLE_ICON)
+        components=await WordleOps.with_season_pages(
+            ctx.client,
+            await WordleOps.get_history_message(
+                ctx.client, user.id, limit, min_attempts, max_attempts, selected
+            ),
+            "history",
+            selected,
+            user.id,
+            limit,
+            min_attempts,
+            max_attempts,
+        )
     )
 
 
@@ -579,12 +526,19 @@ async def command_wordle_leaderboard(
     ] = Direction.DESCENDING,
 ) -> None:
     """Handle the /wordle leaderboard command."""
+    board: WordleLeaderboardType = WordleLeaderboardType(category)
+    selected: Season | None = WordleOps.resolve_season(season)
+
     await ctx.respond(
-        component=await WordleOps.get_leaderboard_message(
-            WordleLeaderboardType(category),
+        components=await WordleOps.with_season_pages(
+            ctx.client,
+            await WordleOps.get_leaderboard_message(board, limit, direction, selected),
+            "leaderboard",
+            # Seasonal wins are always All-Time, so there are no seasons to page
+            None if board == WordleLeaderboardType.SEASONAL_WINS else selected,
+            board,
             limit,
             direction,
-            WordleOps.resolve_season(season),
         )
     )
 
@@ -772,40 +726,16 @@ async def command_wordle_missing(
         user = ctx.author
 
     selected: Season | None = WordleOps.resolve_season(season)
-    label: str = season_label(selected)
-    total: int = await WordleOps.count_puzzles(ctx.client, selected)
-    missing: int = await WordleOps.count_missing_puzzles(ctx.client, user.id, selected)
-
-    if not missing:
-        await ctx.respond(
-            component=Templates.generic(
-                TemplateType.INFO,
-                f"Player {user.mention} is not missing any {label} Wordle puzzle completions."
-                if total
-                else f"There are no {label} Wordle puzzles to be missing completion yet.",
-            )
-        )
-
-        return
-
-    puzzles: list[WordlePuzzle] = await WordleOps.get_missing_puzzles(
-        ctx.client, user.id, limit, selected
-    )
-
-    result: str = f"## Missing Wordle Puzzle Completions"
-    result += f"\n-# {season_caption(selected)}"
-    result += f"\n-# {user.mention} is missing **{missing:,}** of {total:,} completions ({percentage(missing, total):,}%)."
-
-    for puzzle in puzzles:
-        result += f"\n* `{puzzle.id}` ||**`{puzzle.solution}`**||"
-
-    remaining: int = missing - len(puzzles)
-
-    if remaining:
-        result += f"\n-# ...and **{remaining:,}** more."
 
     await ctx.respond(
-        component=Templates.generic_thumb(TemplateType.SUCCESS, result, WORDLE_ICON)
+        components=await WordleOps.with_season_pages(
+            ctx.client,
+            await WordleOps.get_missing_message(ctx.client, user.id, limit, selected),
+            "missing",
+            selected,
+            user.id,
+            limit,
+        )
     )
 
 
@@ -813,6 +743,67 @@ async def command_wordle_missing(
 async def event_wordle_message(event: GuildMessageCreateEvent) -> None:
     """Handle server messages upon creation."""
     await WordleOps.import_data(plugin.client, event.message, event=True)
+
+
+@plugin.listen()
+async def event_wordle_season_page(event: ComponentInteractionCreateEvent) -> None:
+    """Handle season page button presses by editing the message to show the selected season."""
+    interaction: ComponentInteraction = event.interaction
+    prefix, _, value = interaction.custom_id.partition(":")
+
+    if prefix != SEASON_PAGE_PREFIX:
+        return
+
+    command, key, *args = value.split(":")
+    season: Season | None = Season.parse(key)
+
+    logger.info(
+        f"Season page {key} of {command} used by {interaction.user.display_name}"
+    )
+    logger.trace(f"{interaction=}")
+
+    if not season:
+        logger.warning(f"Ignored season page with unknown season {key}")
+
+        return
+
+    await interaction.create_initial_response(ResponseType.DEFERRED_MESSAGE_UPDATE)
+
+    container: ContainerComponentBuilder
+
+    match command, args:
+        case "stats", [user_id]:
+            container = await WordleOps.get_stats_message(
+                plugin.client, int(user_id), season
+            )
+        case "history", [user_id, limit, min_attempts, max_attempts]:
+            container = await WordleOps.get_history_message(
+                plugin.client,
+                int(user_id),
+                int(limit),
+                int(min_attempts) if min_attempts else None,
+                int(max_attempts) if max_attempts else None,
+                season,
+            )
+        case "leaderboard", [category, limit, direction]:
+            container = await WordleOps.get_leaderboard_message(
+                WordleLeaderboardType(category), int(limit), direction, season
+            )
+        case "missing", [user_id, limit]:
+            container = await WordleOps.get_missing_message(
+                plugin.client, int(user_id), int(limit), season
+            )
+        case _:
+            logger.warning(f"Ignored season page of unknown command {command}")
+            logger.trace(f"{args=}")
+
+            return
+
+    await interaction.edit_initial_response(
+        components=await WordleOps.with_season_pages(
+            plugin.client, container, command, season, *args
+        )
+    )
 
 
 @plugin.set_error_handler
@@ -1463,6 +1454,174 @@ class WordleOps:
             logger.trace(f"{players=}")
 
             return players
+
+    @staticmethod
+    async def with_season_pages(
+        client: GatewayClient,
+        container: ContainerComponentBuilder,
+        command: str,
+        season: Season | None,
+        *args: str | int | None,
+    ) -> list[ComponentBuilder]:
+        """Add buttons that page the given command output to the previous and next seasons. None is All-Time, which has no pages.
+
+        The buttons' custom IDs hold the command's options, so they work across restarts.
+        """
+        if not season:
+            return [container]
+
+        now: date = today()
+        first: date = await WordleOps.get_first_puzzle_day(client) or now
+        options: list[str] = ["" if arg is None else str(arg) for arg in args]
+        pages: list[tuple[Season, str, bool]] = [
+            (
+                season.previous,
+                f"◀ {season.previous.label}",
+                season.previous.end < first,
+            ),
+            (season.next, f"{season.next.label} ▶", season.next.start > now),
+        ]
+
+        if all(disabled for _, _, disabled in pages):
+            logger.debug(f"Skipped season pages for {command}, no adjacent seasons")
+
+            return [container]
+
+        row: MessageActionRowBuilder = MessageActionRowBuilder()
+
+        for page, label, disabled in pages:
+            row.add_interactive_button(
+                ButtonStyle.SECONDARY,
+                ":".join([SEASON_PAGE_PREFIX, command, page.key, *options]),
+                label=label,
+                is_disabled=disabled,
+            )
+
+        return [container, row]
+
+    @staticmethod
+    async def get_stats_message(
+        client: GatewayClient, player_id: int, season: Season | None
+    ) -> ContainerComponentBuilder:
+        """Get the formatted statistics message for the given Player and season."""
+        player: WordleStats | None = await WordleOps.get_player_stats(
+            client, player_id, season
+        )
+
+        if not player:
+            return Templates.generic(
+                TemplateType.INFO,
+                f"No {season_label(season)} Wordle statistics found for <@{player_id}>.",
+            )
+
+        total_puzzles: int = await WordleOps.count_puzzles(client, season)
+        completions: int = player.completions
+        fails: int = player.fails
+        aces: int = player.aces
+
+        stats: str = f"## Wordle Statistics for <@{player.player_id}>"
+        stats += f"\n-# {season_caption(season)}"
+        stats += f"\n* Points: **{player.points:,}** ({player.points_gross:,} gross)"
+        stats += f"\n* Average: **{player.average_attempts:,}**"
+        stats += f"\n* Completions: **{completions:,}** of {total_puzzles:,} ({percentage(completions, total_puzzles):,}%)"
+        stats += f"\n* Fails: **{fails:,}** of {total_puzzles:,} ({percentage(fails, total_puzzles):,}%) | {WordlePoints.FAIL * fails:,} points"
+        stats += f"\n* Aces: **{aces:,}** of {total_puzzles:,} ({percentage(aces, total_puzzles):,}%) | {WordlePoints.ATTEMPTS_1 * aces:,} points"
+
+        return Templates.generic_thumb(TemplateType.SUCCESS, stats, WORDLE_ICON)
+
+    @staticmethod
+    async def get_history_message(
+        client: GatewayClient,
+        player_id: int,
+        limit: int,
+        min_attempts: int | None,
+        max_attempts: int | None,
+        season: Season | None,
+    ) -> ContainerComponentBuilder:
+        """Get the formatted puzzle history message for the given Player and season."""
+        player: Player = await Database.get_player(client, player_id)
+        results: list[WordleResult] = sorted(
+            (
+                result
+                for result in player.wordle_results
+                if not season or season.contains(result.puzzle_day)
+            ),
+            key=lambda r: r.puzzle_id,
+            reverse=True,
+        )
+
+        if not results:
+            return Templates.generic(
+                TemplateType.INFO,
+                f"Player <@{player_id}> has no {season_label(season)} Wordle history.",
+            )
+
+        history: str = f"## Wordle History for <@{player_id}>"
+        history += f"\n-# {season_caption(season)}"
+        current: int = 0
+
+        for result in results:
+            attempts: int = result.attempts
+
+            if min_attempts and (attempts < min_attempts):
+                logger.debug(f"Skipped result {result.id}, attempts below minimum")
+                logger.trace(f"{result=}")
+
+                continue
+            elif max_attempts and (attempts > max_attempts):
+                logger.debug(f"Skipped result {result.id}, attempts above maximum")
+                logger.trace(f"{result=}")
+
+                continue
+
+            puzzle_id: int = result.puzzle_id
+            solution: str = result.puzzle_solution
+            score: str = "X" if attempts == 7 else f"{attempts:,}"
+            points: int = await WordleOps.get_points(attempts)
+
+            history += f"\n* `{puzzle_id}` ||**`{solution}`**||: **{score}**/6 ({points:,} points)"
+
+            current += 1
+
+            if limit and current >= limit:
+                break
+
+        return Templates.generic_thumb(TemplateType.SUCCESS, history, WORDLE_ICON)
+
+    @staticmethod
+    async def get_missing_message(
+        client: GatewayClient, player_id: int, limit: int, season: Season | None
+    ) -> ContainerComponentBuilder:
+        """Get the formatted missing puzzle completions message for the given Player and season."""
+        label: str = season_label(season)
+        total: int = await WordleOps.count_puzzles(client, season)
+        missing: int = await WordleOps.count_missing_puzzles(client, player_id, season)
+
+        if not missing:
+            return Templates.generic(
+                TemplateType.INFO,
+                f"Player <@{player_id}> is not missing any {label} Wordle puzzle completions."
+                if total
+                else f"There are no {label} Wordle puzzles to be missing completion yet.",
+            )
+
+        puzzles: list[WordlePuzzle] = await WordleOps.get_missing_puzzles(
+            client, player_id, limit, season
+        )
+
+        result: str = f"## Missing Wordle Puzzle Completions"
+        result += f"\n-# {season_caption(season)}"
+        result += f"\n-# <@{player_id}> is missing **{missing:,}** of {total:,} completions ({percentage(missing, total):,}%)."
+
+        for puzzle in puzzles:
+            result += f"\n* `{puzzle.id}` ||**`{puzzle.solution}`**||"
+
+        remaining: int = missing - len(puzzles)
+
+        if remaining:
+            result += f"\n-# ...and **{remaining:,}** more."
+
+        return Templates.generic_thumb(TemplateType.SUCCESS, result, WORDLE_ICON)
 
     @staticmethod
     async def get_leaderboard_message(
