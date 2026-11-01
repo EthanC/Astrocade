@@ -1,7 +1,7 @@
 """Extension containing Wordle commands."""
 
 import re
-from asyncio import sleep
+from asyncio import sleep, to_thread
 from datetime import date, datetime, timedelta
 from operator import pos
 from re import Match, Pattern
@@ -57,6 +57,7 @@ from sqlmodel import col, func
 from core.consts import (
     ASTROCADE_LOGO,
     DICTIONARY_API_KEY,
+    MAX_RESULTS_IMAGE_BYTES,
     REGEX_WORDLE_SHARE,
     REGEX_WORDLE_STREAK,
     REGEX_WORDLE_STREAK_ATTEMPT,
@@ -80,6 +81,7 @@ from core.database import (
 )
 from core.hooks import Hooks
 from core.models import Player, WordlePuzzle, WordleResult, WordleStreak
+from core.ocr import OCR
 from core.templates import Templates, TemplateType, percentage
 
 plugin: GatewayPluginBase = GatewayPluginBase("wordle")
@@ -1241,6 +1243,46 @@ class WordleOps:
         return WORDLE_EPOCH + timedelta(days=id)
 
     @staticmethod
+    async def read_results_image(msg: Message) -> int | None:
+        """Read the puzzle ID from the results image attached to a Wordle streak message."""
+        for attachment in msg.attachments:
+            if attachment.size > MAX_RESULTS_IMAGE_BYTES:
+                logger.debug(
+                    f"Skipped attachment {attachment.filename} of message {msg.id}, too large ({attachment.size:,} bytes)"
+                )
+
+                continue
+            elif attachment.media_type and not attachment.media_type.startswith(
+                "image/"
+            ):
+                logger.debug(
+                    f"Skipped attachment {attachment.filename} of message {msg.id}, not an image ({attachment.media_type})"
+                )
+
+                continue
+
+            try:
+                data: bytes = await attachment.read()
+            except Exception as e:
+                logger.opt(exception=e).warning(
+                    f"Failed to download attachment {attachment.filename} of Wordle streak message {msg.id}"
+                )
+
+                continue
+
+            if (puzzle_id := await to_thread(OCR.read_wordle_number, data)) is not None:
+                logger.debug(
+                    f"Read puzzle {puzzle_id} from results image {attachment.filename} of Wordle streak message {msg.id}"
+                )
+
+                return puzzle_id
+
+        logger.warning(
+            f"Failed to read the puzzle number from the results image of Wordle streak message {msg.id}"
+        )
+        logger.debug(f"{msg.attachments=}")
+
+    @staticmethod
     async def get_puzzle_day(id: int, start_day: date) -> date:
         """Get Wordle puzzle day for a given ID, checking nearby days."""
         for offset in (0, -1, 1):
@@ -1357,9 +1399,7 @@ class WordleOps:
         if not server and guild_id:
             server = int(guild_id)
 
-        logger.debug(
-            f"Wordle streak message {msg.id} has streak {streak:,} and attachments {[a.filename for a in msg.attachments]}"
-        )
+        logger.debug(f"Wordle streak message {msg.id} has streak {streak:,}")
 
         entries: dict[int, int] = await WordleOps._parse_streak(client, msg, server)
 
@@ -1486,11 +1526,12 @@ class WordleOps:
         """
         Determine the ID of the Wordle puzzle that a streak message reports results for.
 
-        The streak message does not state its puzzle, and its arrival time drifts with the
-        time zone of whichever player starts the puzzle first. The group streak counter
-        increments by exactly one per day, so the puzzle is derived from the nearest
-        previously recorded streak message in the channel. The message timestamp is only
-        used as a plausibility window, and as a fallback when no anchor is usable.
+        The message text does not state its puzzle, and its arrival time drifts with the
+        time zone of whichever player starts the puzzle first. In order of preference, the
+        puzzle is read from the attached results image ("Wordle No. {id}"), or derived from
+        the nearest recorded streak message in the channel, as the group streak counter
+        increments by exactly one per day. The message timestamp is only used as a
+        plausibility window, and as a fallback when neither is usable.
         """
         if existing := await WordleOps.get_streak(client, msg.id):
             logger.debug(
@@ -1506,26 +1547,37 @@ class WordleOps:
         latest: int = WordleOps.puzzle_id_for_day(created.date())
         window: range = range(latest - 2, latest + 1)
 
-        # Candidates as (puzzle ID, source, anchored), in order of preference
-        candidates: list[tuple[int, str, bool]] = []
+        anchors: list[tuple[int, str]] = []
 
         if preceding and streak > preceding.streak:
-            candidates.append(
+            anchors.append(
                 (
                     preceding.puzzle_id + (streak - preceding.streak),
                     f"previous streak message {preceding.id}",
-                    True,
                 )
             )
 
         if following and following.streak > streak:
-            candidates.append(
+            anchors.append(
                 (
                     following.puzzle_id - (following.streak - streak),
                     f"following streak message {following.id}",
-                    True,
                 )
             )
+
+        # Candidates as (puzzle ID, source, trusted), in order of preference
+        candidates: list[tuple[int, str, bool]] = []
+
+        if (image_id := await WordleOps.read_results_image(msg)) is not None:
+            candidates.append((image_id, "results image", True))
+
+            for anchor_id, source in anchors:
+                if anchor_id != image_id:
+                    logger.warning(
+                        f"Wordle streak message {msg.id} results image reads puzzle {image_id}, but {source} implies puzzle {anchor_id}"
+                    )
+
+        candidates.extend((anchor_id, source, True) for anchor_id, source in anchors)
 
         # Fallback: "Here are yesterday's results", favoring two days prior before cutoff
         for offset in (2, 1, 0) if created.hour < WORDLE_CUTOFF_HOUR else (1, 0, 2):
@@ -1537,7 +1589,7 @@ class WordleOps:
         rejected: list[str] = []
         seen: set[int] = set()
 
-        for puzzle_id, source, anchored in candidates:
+        for puzzle_id, source, trusted in candidates:
             if puzzle_id in seen:
                 continue
 
@@ -1567,7 +1619,7 @@ class WordleOps:
 
                 continue
 
-            if anchored and not rejected:
+            if trusted and not rejected:
                 logger.debug(
                     f"Attributed Wordle streak message {msg.id} to puzzle {puzzle_id} (from {source})"
                 )

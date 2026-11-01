@@ -122,6 +122,7 @@ REGEX_WORDLE_STREAK_TAG: Final[Pattern[str]] = re.compile(r"<@(\w+)>|@(\w+)")
 REGEX_WORDLE_SHARE: Final[Pattern[str]] = re.compile(r"Wordle\s+(\d+)\s+([0-6X])/6")
 WORDLE_CUTOFF_HOUR: Final[int] = env.int(Environment.WORDLE_CUTOFF_HOUR, 3)
 WORDLE_EPOCH: Final[date] = date(2021, 6, 19)  # Day of Wordle puzzle 0
+MAX_RESULTS_IMAGE_BYTES: Final[int] = 5 * 1024 * 1024
 WORDLE_ICON: Final[Path] = (
     Path(__file__).resolve().parent.parent / "assets" / "wordle_icon.png"
 )

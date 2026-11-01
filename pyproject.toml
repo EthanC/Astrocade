@@ -11,6 +11,7 @@ dependencies = [
     "loguru>=0.7.3",
     "loguru-discord>=2.2.0",
     "niquests>=3.21.2",
+    "pillow>=13.0.0",
     "sqlalchemy[asyncio]>=2.1.6",
     "sqlmodel>=0.0.48",
     "tzdata>=2026.6",
