@@ -2,7 +2,7 @@
 
 import re
 from dataclasses import dataclass
-from datetime import MAXYEAR, MINYEAR, date, datetime, timedelta
+from datetime import MAXYEAR, MINYEAR, date, datetime, time, timedelta
 from re import Match, Pattern
 from typing import Final, Self
 
@@ -22,6 +22,15 @@ def today() -> date:
 def format_day(day: date) -> str:
     """Format a date as "Oct 1, 2026" (strftime's %-d is not portable)."""
     return f"{day:%b} {day.day}, {day.year}"
+
+
+def timestamp_day(day: date) -> str:
+    """Format a date as a Discord timestamp that renders in each viewer's locale.
+
+    Anchored at noon in the configured time zone so the rendered date matches the
+    calendar day for viewers within 12 hours of it.
+    """
+    return f"<t:{int(datetime.combine(day, time(12), TZ).timestamp())}:D>"
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -115,7 +124,12 @@ class Season:
 
     @property
     def dates(self: Self) -> str:
-        """Display range of the days covered by the season."""
+        """Display range of the days covered by the season, as Discord timestamps."""
+        return f"{timestamp_day(self.start)} – {timestamp_day(self.end)}"
+
+    @property
+    def dates_plain(self: Self) -> str:
+        """Display range of the days covered by the season, as plain text."""
         return f"{format_day(self.start)} – {format_day(self.end)}"
 
     def contains(self: Self, day: date) -> bool:

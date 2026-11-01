@@ -202,9 +202,7 @@ async def autocomplete_season(
     choices: dict[str, str] = {}
 
     for season in Season.span(min(first, now), now):
-        name: str = (
-            f"{season.label} ({'Current' if season.contains(now) else season.dates})"
-        )
+        name: str = f"{season.label} ({'Current' if season.contains(now) else season.dates_plain})"
 
         if query in name.lower() or query in season.key:
             choices[name] = season.key
