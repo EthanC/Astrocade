@@ -73,7 +73,7 @@ All configuration is managed through environment variables on the system hosting
 | `DISCORD_BOT_TOKEN` (Required)  | [Discord API](https://discord.com/developers/docs/quick-start/getting-started#fetching-your-credentials) credentials for your Bot user. | N/A                   |
 | `DISCORD_SERVER_IDS` (Required) | Comma-separated list of Discord server IDs to sync commands to.                                                                         | N/A                   |
 | `WORDLE_BOT_ID`                 | User ID of the [Wordle Discord Activity](https://discord.com/discovery/applications/1211781489931452447) Bot user.                      | `1211781489931452447` |
-| `WORDLE_CUTOFF_HOUR`            | Hour after midnight (local time) that determines the cutoff for treating messages as belonging to the previous day.                     | `3`                  |
+| `WORDLE_CUTOFF_HOUR`            | Hour after midnight (local time) before which an unanchored streak message favors the puzzle from two days prior.                       | `3`                   |
 | `WORDLE_POINTS_ATTEMPTS_1`      | Number of points awarded for a Wordle puzzle completion in 1 attempt.                                                                   | `10`                  |
 | `WORDLE_POINTS_ATTEMPTS_2`      | Number of points awarded for a Wordle puzzle completion in 2 attempts.                                                                  | `5`                   |
 | `WORDLE_POINTS_ATTEMPTS_3`      | Number of points awarded for a Wordle puzzle completion in 3 attempts.                                                                  | `4`                   |

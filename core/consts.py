@@ -1,6 +1,7 @@
 """Enumerations and constant values."""
 
 import re
+from datetime import date
 from enum import IntEnum, StrEnum, auto
 from pathlib import Path
 from re import Pattern
@@ -114,12 +115,13 @@ class WordlePoints(IntEnum):
 
 
 REGEX_WORDLE_STREAK: Final[Pattern[str]] = re.compile(
-    r"Your\s+group\s+is\s+on\s+an?\s+(\d+)\s+day\s+streak"
+    r"Your\s+group\s+is\s+on\s+an?\s+([\d,]+)\s+day\s+streak"
 )
 REGEX_WORDLE_STREAK_ATTEMPT: Final[Pattern[str]] = re.compile(r"([a-zA-Z0-9]+)/\d+:")
 REGEX_WORDLE_STREAK_TAG: Final[Pattern[str]] = re.compile(r"<@(\w+)>|@(\w+)")
 REGEX_WORDLE_SHARE: Final[Pattern[str]] = re.compile(r"Wordle\s+(\d+)\s+([0-6X])/6")
 WORDLE_CUTOFF_HOUR: Final[int] = env.int(Environment.WORDLE_CUTOFF_HOUR, 3)
+WORDLE_EPOCH: Final[date] = date(2021, 6, 19)  # Day of Wordle puzzle 0
 WORDLE_ICON: Final[Path] = (
     Path(__file__).resolve().parent.parent / "assets" / "wordle_icon.png"
 )

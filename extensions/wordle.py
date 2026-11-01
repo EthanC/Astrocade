@@ -64,6 +64,7 @@ from core.consts import (
     TZ,
     WORDLE_BOT_ID,
     WORDLE_CUTOFF_HOUR,
+    WORDLE_EPOCH,
     WORDLE_ICON,
     Direction,
     WordleLeaderboardType,
@@ -78,7 +79,7 @@ from core.database import (
     select,
 )
 from core.hooks import Hooks
-from core.models import Player, WordlePuzzle, WordleResult
+from core.models import Player, WordlePuzzle, WordleResult, WordleStreak
 from core.templates import Templates, TemplateType, percentage
 
 plugin: GatewayPluginBase = GatewayPluginBase("wordle")
@@ -646,9 +647,15 @@ class WordleOps:
     ) -> WordleResult | None:
         """Add a WordleResult for the given Player and WordlePuzzle to the database."""
         if result := await WordleOps.get_result(client, player_id, puzzle_id):
-            logger.debug(
-                f"Skipped WordleResult creation, already exists for player {player_id} and puzzle {puzzle_id}"
-            )
+            if result.attempts != attempts:
+                logger.warning(
+                    f"Skipped WordleResult creation for player {player_id} and puzzle {puzzle_id}, existing result has {result.attempts} attempts but {attempts} were reported"
+                )
+            else:
+                logger.debug(
+                    f"Skipped WordleResult creation, already exists for player {player_id} and puzzle {puzzle_id}"
+                )
+
             logger.trace(f"{result=}")
 
             return
@@ -673,6 +680,131 @@ class WordleOps:
             logger.success(f"Added WordleResult {result.id} to database")
 
             return result
+
+    @staticmethod
+    async def get_result_conflicts(
+        client: GatewayClient, puzzle_id: int, entries: dict[int, int]
+    ) -> list[int]:
+        """Get the Players whose existing WordleResult for the given puzzle disagrees with the given attempts."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+
+        async with AsyncSession(engine) as session:
+            statement: SelectOfScalar[WordleResult] = (
+                select(WordleResult)
+                .where(WordleResult.puzzle_id == puzzle_id)
+                .where(col(WordleResult.player_id).in_(list(entries)))
+            )
+
+            logger.debug(f"Find conflicting WordleResults for puzzle {puzzle_id}")
+            logger.trace(f"{statement=}\n{engine=}\n{session=}")
+
+            results: ScalarResult[WordleResult] = await session.exec(statement)
+
+            return [
+                result.player_id
+                for result in results.all()
+                if result.attempts != entries[result.player_id]
+            ]
+
+    @staticmethod
+    async def get_streak(client: GatewayClient, id: int) -> WordleStreak | None:
+        """Get a WordleStreak for the given Discord Message ID from the database."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+
+        async with AsyncSession(engine) as session:
+            statement: SelectOfScalar[WordleStreak] = select(WordleStreak).where(
+                WordleStreak.id == id
+            )
+
+            logger.debug(f"Find WordleStreak {id} in database")
+            logger.trace(f"{statement=}\n{engine=}\n{session=}")
+
+            results: ScalarResult[WordleStreak] = await session.exec(statement)
+
+            return results.first()
+
+    @staticmethod
+    async def get_adjacent_streaks(
+        client: GatewayClient, channel_id: int, id: int
+    ) -> tuple[WordleStreak | None, WordleStreak | None]:
+        """Get the WordleStreaks immediately preceding and following the given Discord Message ID in a channel."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+
+        async with AsyncSession(engine) as session:
+            preceding: SelectOfScalar[WordleStreak] = (
+                select(WordleStreak)
+                .where(WordleStreak.channel_id == channel_id)
+                .where(col(WordleStreak.id) < id)
+                .order_by(col(WordleStreak.id).desc())
+                .limit(1)
+            )
+            following: SelectOfScalar[WordleStreak] = (
+                select(WordleStreak)
+                .where(WordleStreak.channel_id == channel_id)
+                .where(col(WordleStreak.id) > id)
+                .order_by(col(WordleStreak.id).asc())
+                .limit(1)
+            )
+
+            logger.debug(f"Find WordleStreaks adjacent to {id} in channel {channel_id}")
+            logger.trace(f"{preceding=}\n{following=}\n{engine=}\n{session=}")
+
+            return (
+                (await session.exec(preceding)).first(),
+                (await session.exec(following)).first(),
+            )
+
+    @staticmethod
+    async def get_claimed_puzzles(
+        client: GatewayClient, channel_id: int, puzzle_ids: range
+    ) -> set[int]:
+        """Get the given puzzle IDs that are already attributed to a WordleStreak in a channel."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+
+        async with AsyncSession(engine) as session:
+            statement: SelectOfScalar[int] = (
+                select(WordleStreak.puzzle_id)
+                .where(WordleStreak.channel_id == channel_id)
+                .where(col(WordleStreak.puzzle_id).in_(list(puzzle_ids)))
+            )
+
+            logger.debug(f"Find claimed WordlePuzzles in channel {channel_id}")
+            logger.trace(f"{statement=}\n{engine=}\n{session=}")
+
+            results: ScalarResult[int] = await session.exec(statement)
+
+            return set(results.all())
+
+    @staticmethod
+    async def add_streak(
+        client: GatewayClient, msg: Message, streak: int, puzzle_id: int
+    ) -> WordleStreak:
+        """Add a WordleStreak for the given Discord Message and WordlePuzzle to the database."""
+        if existing := await WordleOps.get_streak(client, msg.id):
+            return existing
+
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+        record: WordleStreak = WordleStreak(
+            id=int(msg.id),
+            channel_id=int(msg.channel_id),
+            streak=streak,
+            puzzle_id=puzzle_id,
+        )
+
+        async with AsyncSession(engine) as session:
+            logger.debug(f"Add WordleStreak {record.id} to database")
+            logger.trace(f"{record=}\n{engine=}\n{session=}")
+
+            session.add(record)
+
+            await session.commit()
+            await session.refresh(record)
+
+            logger.success(
+                f"Added WordleStreak {record.id} (puzzle {record.puzzle_id}) to database"
+            )
+
+            return record
 
     @staticmethod
     async def get_puzzle(
@@ -1099,21 +1231,14 @@ class WordleOps:
         return res.json()
 
     @staticmethod
-    async def get_puzzle_id(day: date) -> int:
-        """Get Wordle puzzle ID for a given day."""
-        for offset in (0, -1, 1):
-            possibility: date = day + timedelta(days=offset)
-            metadata: dict[str, Any] = await WordleOps._get_puzzle_metadata(possibility)
-            print_date: str | None = metadata.get("print_date")
-            days_since: int | None = metadata.get("days_since_launch")
+    def puzzle_id_for_day(day: date) -> int:
+        """Return the Wordle puzzle ID for a given day (days since launch)."""
+        return (day - WORDLE_EPOCH).days
 
-            if (
-                print_date == possibility.strftime("%Y-%m-%d")
-                and days_since is not None
-            ):
-                return days_since
-
-        raise RuntimeError(f"Failed to determine Wordle puzzle ID for {day=}")
+    @staticmethod
+    def puzzle_day_for_id(id: int) -> date:
+        """Return the day of a given Wordle puzzle ID (days since launch)."""
+        return WORDLE_EPOCH + timedelta(days=id)
 
     @staticmethod
     async def get_puzzle_day(id: int, start_day: date) -> date:
@@ -1204,114 +1329,79 @@ class WordleOps:
         event: bool = False,
     ) -> WordleResult | list[WordleResult] | None:
         """Import Wordle data from a streak Discord message."""
-        if not msg.content or not re.search(REGEX_WORDLE_STREAK, msg.content):
-            logger.debug(f"Skipped message {msg.id} by {msg.author.id}, not a streak")
-            logger.trace(f"{msg=}")
+        header: Match[str] | None = (
+            re.search(REGEX_WORDLE_STREAK, msg.content) if msg.content else None
+        )
+
+        if not msg.content or not header:
+            if (
+                msg.content
+                and re.search(REGEX_WORDLE_STREAK_ATTEMPT, msg.content)
+                and re.search(REGEX_WORDLE_STREAK_TAG, msg.content)
+            ):
+                logger.warning(
+                    f"Skipped message {msg.id} by {msg.author.id}, contains Wordle results but no streak header (unrecognized format)"
+                )
+                logger.debug(f"{msg.content=}")
+            else:
+                logger.debug(
+                    f"Skipped message {msg.id} by {msg.author.id}, not a streak"
+                )
+                logger.trace(f"{msg=}")
 
             return
 
+        streak: int = int(header.group(1).replace(",", ""))
         server: int | None = msg.guild_id
 
         if not server and guild_id:
             server = int(guild_id)
 
+        logger.debug(
+            f"Wordle streak message {msg.id} has streak {streak:,} and attachments {[a.filename for a in msg.attachments]}"
+        )
+
+        entries: dict[int, int] = await WordleOps._parse_streak(client, msg, server)
+
+        if not entries:
+            logger.warning(
+                f"Skipped Wordle streak message {msg.id}, no player results found"
+            )
+            logger.debug(f"{msg.content=}")
+
+            return
+
+        puzzle_id: int | None = await WordleOps._resolve_streak_puzzle(
+            client, msg, streak, entries
+        )
+
+        if puzzle_id is None:
+            return
+
+        puzzle: WordlePuzzle | None = await WordleOps.get_puzzle(
+            client, puzzle_id, WordleOps.puzzle_day_for_id(puzzle_id)
+        )
+
+        if not puzzle:
+            raise RuntimeError(
+                f"Cannot import Wordle streak message {msg.id} without puzzle {puzzle_id} data"
+            )
+
+        await WordleOps.add_streak(client, msg, streak, puzzle.id)
+
         results: list[WordleResult] = []
 
-        for line in msg.content.splitlines():
-            attempt: Match[str] | None = re.search(REGEX_WORDLE_STREAK_ATTEMPT, line)
-
-            if not attempt:
-                logger.debug(
-                    f"Skipped line in message {msg.id} by {msg.author.id}, not an attempt"
-                )
-                logger.trace(f"{line=}")
-
-                continue
-
-            date_created: date = msg.created_at.astimezone(TZ)
-            date_effective: date = date_created.date()
-
-            if date_created.hour < WORDLE_CUTOFF_HOUR:
-                date_effective -= timedelta(days=1)
-
-                logger.warning(
-                    f"Wordle streak message {msg.id} creation is prior to cutoff hour, subtracting an additional day"
-                )
-                logger.debug(
-                    f"{date_created.hour=} {date_effective=} {WORDLE_CUTOFF_HOUR=}"
-                )
-
-            date_effective -= timedelta(days=1)  # "Here are yesterday's results"
-
-            logger.debug(
-                f"Wordle Streak message {msg.id} determined date is {date_effective.ctime()}"
+        for player_id, attempts in entries.items():
+            player: Player = await Database.get_player(client, player_id)
+            result: WordleResult | None = await WordleOps.add_result(
+                client, attempts, player.id, puzzle.id
             )
-            logger.trace(f"{date_created.date()=} {date_effective=}")
 
-            attempts: int = (
-                7 if (attempts_raw := attempt.group(1)) == "X" else int(attempts_raw)
-            )
-            tags: list[Any] = re.findall(REGEX_WORDLE_STREAK_TAG, line)
+            if result:
+                results.append(result)
 
-            for tag in tags:
-                user: int | str = int(tag[0]) if tag[0] else tag[1]
-
-                # Attempt to resolve name to ID
-                if isinstance(user, str):
-                    if not server:
-                        logger.error(f"Cannot resolve tag {user}, server is null")
-                        logger.debug(f"{tag=}\n{msg=}")
-
-                        continue
-
-                    members: Sequence[Member] = await client.rest.fetch_members(server)
-
-                    for member in members:
-                        names: list[str] = list(
-                            dict.fromkeys(
-                                name
-                                for name in (
-                                    member.username,
-                                    member.global_name,
-                                    member.nickname,
-                                )
-                                if name
-                            )
-                        )
-
-                        for name in names:
-                            if name == user:
-                                user = member.id
-
-                                # Exit members loop
-                                break
-
-                if isinstance(user, str):
-                    logger.error(f"Failed to resolve tag {user} ({', '.join(names)})")
-                    logger.debug(f"{tag=}")
-
-                    continue
-
-                player: Player = await Database.get_player(client, user)
-                puzzle_id: int = await WordleOps.get_puzzle_id(date_effective)
-                puzzle: WordlePuzzle | None = await WordleOps.get_puzzle(
-                    client, puzzle_id, date_effective
-                )
-
-                if not puzzle:
-                    raise RuntimeError(
-                        f"Cannot import WordleResult {player.id}_{puzzle_id} without puzzle data"
-                    )
-
-                result: WordleResult | None = await WordleOps.add_result(
-                    client, attempts, player.id, puzzle.id
-                )
-
-                if result:
-                    results.append(result)
-
-                    logger.success(f"Created placement for {user}")
-                    logger.debug(f"{result=}")
+                logger.success(f"Created placement for {player.id}")
+                logger.debug(f"{result=}")
 
         if results and event:
             await client.rest.create_message(
@@ -1323,6 +1413,176 @@ class WordleOps:
             )
 
         return results
+
+    @staticmethod
+    async def _parse_streak(
+        client: GatewayClient, msg: Message, server: int | None
+    ) -> dict[int, int]:
+        """Parse the player results of a Wordle streak message as Discord User ID to attempts."""
+        entries: dict[int, int] = {}
+        members: Sequence[Member] | None = None
+
+        for line in (msg.content or "").splitlines():
+            attempt: Match[str] | None = re.search(REGEX_WORDLE_STREAK_ATTEMPT, line)
+
+            if not attempt:
+                logger.debug(
+                    f"Skipped line in message {msg.id} by {msg.author.id}, not an attempt"
+                )
+                logger.trace(f"{line=}")
+
+                continue
+
+            attempts: int = (
+                7 if (attempts_raw := attempt.group(1)) == "X" else int(attempts_raw)
+            )
+
+            for tag in re.findall(REGEX_WORDLE_STREAK_TAG, line):
+                if tag[0]:
+                    entries[int(tag[0])] = attempts
+
+                    continue
+
+                # Attempt to resolve name to ID
+                name: str = tag[1]
+
+                if not server:
+                    logger.error(f"Cannot resolve tag {name}, server is null")
+                    logger.debug(f"{tag=}\n{msg=}")
+
+                    continue
+
+                if members is None:
+                    members = await client.rest.fetch_members(server)
+
+                user_id: int | None = next(
+                    (
+                        member.id
+                        for member in members
+                        if name
+                        in (member.username, member.global_name, member.nickname)
+                    ),
+                    None,
+                )
+
+                if not user_id:
+                    logger.error(
+                        f"Failed to resolve tag {name} to a member of server {server}"
+                    )
+                    logger.debug(f"{tag=}")
+
+                    continue
+
+                entries[user_id] = attempts
+
+        logger.trace(f"{entries=}")
+
+        return entries
+
+    @staticmethod
+    async def _resolve_streak_puzzle(
+        client: GatewayClient, msg: Message, streak: int, entries: dict[int, int]
+    ) -> int | None:
+        """
+        Determine the ID of the Wordle puzzle that a streak message reports results for.
+
+        The streak message does not state its puzzle, and its arrival time drifts with the
+        time zone of whichever player starts the puzzle first. The group streak counter
+        increments by exactly one per day, so the puzzle is derived from the nearest
+        previously recorded streak message in the channel. The message timestamp is only
+        used as a plausibility window, and as a fallback when no anchor is usable.
+        """
+        if existing := await WordleOps.get_streak(client, msg.id):
+            logger.debug(
+                f"Wordle streak message {msg.id} was previously attributed to puzzle {existing.puzzle_id}"
+            )
+
+            return existing.puzzle_id
+
+        preceding, following = await WordleOps.get_adjacent_streaks(
+            client, msg.channel_id, msg.id
+        )
+        created: datetime = msg.created_at.astimezone(TZ)
+        latest: int = WordleOps.puzzle_id_for_day(created.date())
+        window: range = range(latest - 2, latest + 1)
+
+        # Candidates as (puzzle ID, source, anchored), in order of preference
+        candidates: list[tuple[int, str, bool]] = []
+
+        if preceding and streak > preceding.streak:
+            candidates.append(
+                (
+                    preceding.puzzle_id + (streak - preceding.streak),
+                    f"previous streak message {preceding.id}",
+                    True,
+                )
+            )
+
+        if following and following.streak > streak:
+            candidates.append(
+                (
+                    following.puzzle_id - (following.streak - streak),
+                    f"following streak message {following.id}",
+                    True,
+                )
+            )
+
+        # Fallback: "Here are yesterday's results", favoring two days prior before cutoff
+        for offset in (2, 1, 0) if created.hour < WORDLE_CUTOFF_HOUR else (1, 0, 2):
+            candidates.append((latest - offset, "message timestamp", False))
+
+        claimed: set[int] = await WordleOps.get_claimed_puzzles(
+            client, msg.channel_id, window
+        )
+        rejected: list[str] = []
+        seen: set[int] = set()
+
+        for puzzle_id, source, anchored in candidates:
+            if puzzle_id in seen:
+                continue
+
+            seen.add(puzzle_id)
+
+            reason: str | None = None
+
+            if puzzle_id not in window:
+                reason = f"outside plausible range {window.start}-{window.stop - 1}"
+            elif preceding and puzzle_id <= preceding.puzzle_id:
+                reason = f"not after previous streak puzzle {preceding.puzzle_id}"
+            elif following and puzzle_id >= following.puzzle_id:
+                reason = f"not before following streak puzzle {following.puzzle_id}"
+            elif puzzle_id in claimed:
+                reason = "already claimed by another streak message"
+            elif conflicts := await WordleOps.get_result_conflicts(
+                client, puzzle_id, entries
+            ):
+                reason = f"conflicts with existing results for players {', '.join(str(c) for c in conflicts)}"
+
+            if reason:
+                rejected.append(f"{puzzle_id} (from {source}): {reason}")
+
+                logger.debug(
+                    f"Rejected puzzle {puzzle_id} for Wordle streak message {msg.id}, {reason}"
+                )
+
+                continue
+
+            if anchored and not rejected:
+                logger.debug(
+                    f"Attributed Wordle streak message {msg.id} to puzzle {puzzle_id} (from {source})"
+                )
+            else:
+                logger.warning(
+                    f"Attributed Wordle streak message {msg.id} to puzzle {puzzle_id} (from {source}), verify this is correct"
+                )
+                logger.debug(f"{rejected=} {created=} {streak=} {preceding=} {following=}")
+
+            return puzzle_id
+
+        logger.error(
+            f"Failed to determine Wordle puzzle for streak message {msg.id}, no results were imported. Rejected candidates: {'; '.join(rejected)}"
+        )
+        logger.debug(f"{created=} {streak=} {preceding=} {following=} {entries=}")
 
     @staticmethod
     async def _import_share(

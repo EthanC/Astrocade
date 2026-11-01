@@ -3,7 +3,14 @@
 from datetime import date
 from typing import Any, ClassVar, Self, cast
 
-from sqlalchemy import Case, ColumnElement, Integer, ScalarSelect, case
+from sqlalchemy import (
+    Case,
+    ColumnElement,
+    Integer,
+    ScalarSelect,
+    UniqueConstraint,
+    case,
+)
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlmodel import Field, Relationship, SQLModel, func, select
 
@@ -44,6 +51,25 @@ class WordleResult(SQLModel, table=True):
     def puzzle_solution(self: Self) -> str:
         """Solution word of the Wordle puzzle."""
         return self.puzzle.solution
+
+
+class WordleStreak(SQLModel, table=True):
+    """Represents a processed daily Wordle streak (results summary) message."""
+
+    __tablename__ = "wordle_streaks"
+    __table_args__ = (UniqueConstraint("channel_id", "puzzle_id"),)
+
+    id: int = Field(primary_key=True)
+    """Discord Message ID of the streak message (time-ordered Snowflake)."""
+
+    channel_id: int = Field(index=True)
+    """Discord Channel ID the streak message was posted in (one group per channel)."""
+
+    streak: int = Field()
+    """Group streak length stated in the message."""
+
+    puzzle_id: int = Field(foreign_key="wordle_puzzles.id", index=True)
+    """ID of the Wordle puzzle the streak message was attributed to."""
 
 
 class WordlePuzzle(SQLModel, table=True):
