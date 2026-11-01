@@ -1,7 +1,7 @@
 """Enumerations and constant values."""
 
 import re
-from datetime import date
+from datetime import date, timedelta
 from enum import IntEnum, StrEnum, auto
 from pathlib import Path
 from re import Pattern
@@ -120,7 +120,21 @@ REGEX_WORDLE_STREAK: Final[Pattern[str]] = re.compile(
     r"Your\s+group\s+is\s+on\s+an?\s+([\d,]+)\s+day\s+streak"
 )
 REGEX_WORDLE_STREAK_ATTEMPT: Final[Pattern[str]] = re.compile(r"([a-zA-Z0-9]+)/\d+:")
-REGEX_WORDLE_STREAK_TAG: Final[Pattern[str]] = re.compile(r"<@(\w+)>|@(\w+)")
+# A mention (<@ID>) or a plain display name (@Name), which may contain spaces and
+# punctuation, running until the next tag or the end of the line
+REGEX_WORDLE_STREAK_TAG: Final[Pattern[str]] = re.compile(
+    r"<@!?(\d+)>|@(\S(?:.*?\S)?)(?=\s+<?@|\s*$)"
+)
+# Wordle Activity session messages, e.g. "Name was playing", "A and B are playing"
+REGEX_WORDLE_PLAYING: Final[Pattern[str]] = re.compile(
+    r"(?P<players>.+?)\s+(?P<verb>was|is|were|are)\s+playing"
+)
+REGEX_WORDLE_PLAYING_OTHERS: Final[Pattern[str]] = re.compile(
+    r"\s+and\s+[\d,]+\s+others?$"
+)
+REGEX_WORDLE_PLAYING_SEPARATOR: Final[Pattern[str]] = re.compile(r"\s+and\s+")
+REGEX_MARKDOWN_ESCAPE: Final[Pattern[str]] = re.compile(r"\\([^\w\s])")
+WORDLE_NAME_LOOKBACK: Final[timedelta] = timedelta(days=2)
 REGEX_WORDLE_SHARE: Final[Pattern[str]] = re.compile(r"Wordle\s+(\d+)\s+([0-6X])/6")
 WORDLE_CUTOFF_HOUR: Final[int] = env.int(Environment.WORDLE_CUTOFF_HOUR, 3)
 WORDLE_EPOCH: Final[date] = date(2021, 6, 19)  # Day of Wordle puzzle 0

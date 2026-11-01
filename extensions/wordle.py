@@ -67,6 +67,10 @@ from core.consts import (
     DICTIONARY_API_KEY,
     MAX_IMPORT_DATABASE_BYTES,
     MAX_RESULTS_IMAGE_BYTES,
+    REGEX_MARKDOWN_ESCAPE,
+    REGEX_WORDLE_PLAYING,
+    REGEX_WORDLE_PLAYING_OTHERS,
+    REGEX_WORDLE_PLAYING_SEPARATOR,
     REGEX_WORDLE_SHARE,
     REGEX_WORDLE_STREAK,
     REGEX_WORDLE_STREAK_ATTEMPT,
@@ -76,6 +80,7 @@ from core.consts import (
     WORDLE_CUTOFF_HOUR,
     WORDLE_EPOCH,
     WORDLE_ICON,
+    WORDLE_NAME_LOOKBACK,
     Direction,
     WordleLeaderboardType,
     WordlePoints,
@@ -1944,7 +1949,7 @@ class WordleOps:
     ) -> dict[int, int]:
         """Parse the player results of a Wordle streak message as Discord User ID to attempts."""
         entries: dict[int, int] = {}
-        members: Sequence[Member] | None = None
+        named: dict[str, int] = {}
 
         for line in (msg.content or "").splitlines():
             attempt: Match[str] | None = re.search(REGEX_WORDLE_STREAK_ATTEMPT, line)
@@ -1961,39 +1966,28 @@ class WordleOps:
                 7 if (attempts_raw := attempt.group(1)) == "X" else int(attempts_raw)
             )
 
-            for tag in re.findall(REGEX_WORDLE_STREAK_TAG, line):
-                if tag[0]:
-                    entries[int(tag[0])] = attempts
+            for user_id, name in re.findall(
+                REGEX_WORDLE_STREAK_TAG, line[attempt.end() :]
+            ):
+                if user_id:
+                    entries[int(user_id)] = attempts
+                else:
+                    # Players without a mention are listed by display name
+                    named[WordleOps._unescape(name)] = attempts
 
+        if named:
+            resolved: dict[str, int] = await WordleOps._resolve_streak_names(
+                client, msg, server, list(named)
+            )
+
+            for name, attempts in named.items():
+                if (user_id := resolved.get(name)) is None:
                     continue
-
-                # Attempt to resolve name to ID
-                name: str = tag[1]
-
-                if not server:
-                    logger.error(f"Cannot resolve tag {name}, server is null")
-                    logger.debug(f"{tag=}\n{msg=}")
-
-                    continue
-
-                if members is None:
-                    members = await client.rest.fetch_members(server)
-
-                user_id: int | None = next(
-                    (
-                        member.id
-                        for member in members
-                        if name
-                        in (member.username, member.global_name, member.nickname)
-                    ),
-                    None,
-                )
-
-                if not user_id:
-                    logger.error(
-                        f"Failed to resolve tag {name} to a member of server {server}"
+                elif user_id in entries:
+                    logger.warning(
+                        f"Skipped tag {name} in Wordle streak message {msg.id}, resolved to {user_id} who already has a result in it"
                     )
-                    logger.debug(f"{tag=}")
+                    logger.debug(f"{entries=} {resolved=}")
 
                     continue
 
@@ -2002,6 +1996,193 @@ class WordleOps:
         logger.trace(f"{entries=}")
 
         return entries
+
+    @staticmethod
+    def _unescape(text: str) -> str:
+        """Remove Discord markdown escapes from the provided text."""
+        return re.sub(REGEX_MARKDOWN_ESCAPE, r"\1", text).strip()
+
+    @staticmethod
+    async def _resolve_streak_names(
+        client: GatewayClient, msg: Message, server: int | None, names: list[str]
+    ) -> dict[str, int]:
+        """
+        Resolve the display names in a Wordle streak message to Discord User IDs.
+
+        Players who are not mentioned are listed by the display name they had when they
+        played, which may since have changed. Names are first matched against the Wordle
+        Activity's own "Name was playing" messages that precede the streak message, as
+        those pair the name with the Discord User that launched the Activity. Remaining
+        names are matched against the current members of the server, and only accepted
+        when exactly one member matches.
+        """
+        resolved: dict[str, int] = await WordleOps._get_activity_names(
+            client, msg, set(names)
+        )
+
+        for name, user_id in resolved.items():
+            logger.debug(
+                f"Resolved tag {name} in Wordle streak message {msg.id} to {user_id} via Wordle Activity messages"
+            )
+
+        unresolved: list[str] = [name for name in names if name not in resolved]
+
+        if not unresolved:
+            return resolved
+        elif not server:
+            logger.error(
+                f"Cannot resolve tags {', '.join(unresolved)} in Wordle streak message {msg.id}, server is null"
+            )
+            logger.debug(f"{msg=}")
+
+            return resolved
+
+        members: Sequence[Member] = await client.rest.fetch_members(server)
+
+        for name in unresolved:
+            matches: set[int] = WordleOps._match_member(name, members)
+
+            if len(matches) == 1:
+                resolved[name] = matches.pop()
+
+                logger.debug(
+                    f"Resolved tag {name} in Wordle streak message {msg.id} to {resolved[name]} via members of server {server}"
+                )
+            elif matches:
+                logger.error(
+                    f"Failed to resolve tag {name} in Wordle streak message {msg.id}, ambiguous between members {', '.join(str(m) for m in matches)} of server {server}"
+                )
+            else:
+                logger.error(
+                    f"Failed to resolve tag {name} in Wordle streak message {msg.id} to a member of server {server}"
+                )
+
+        return resolved
+
+    @staticmethod
+    def _match_member(name: str, members: Sequence[Member]) -> set[int]:
+        """
+        Find the members that a display name refers to.
+
+        Returns the matches of the strictest criteria that matches anyone: the current
+        display name, then any nickname, global name, or username, then the same
+        ignoring case. More than one match means the name is ambiguous.
+        """
+        folded: str = name.casefold()
+        tiers: list[set[int]] = [set(), set(), set()]
+
+        for member in members:
+            aliases: tuple[str, ...] = tuple(
+                alias
+                for alias in (member.nickname, member.global_name, member.username)
+                if alias
+            )
+
+            if member.display_name == name:
+                tiers[0].add(int(member.id))
+
+            if name in aliases:
+                tiers[1].add(int(member.id))
+
+            if folded in (alias.casefold() for alias in aliases):
+                tiers[2].add(int(member.id))
+
+        return next((matches for matches in tiers if matches), set())
+
+    @staticmethod
+    async def _get_activity_names(
+        client: GatewayClient, msg: Message, names: set[str]
+    ) -> dict[str, int]:
+        """
+        Map display names to Discord User IDs using Wordle Activity session messages.
+
+        The Wordle Activity posts "Name was playing" when a player launches it, with
+        that player as the interaction user. Session messages preceding the provided
+        message are scanned newest first until every name is found, or the lookback
+        window ends. Two-player sessions ("A and B were playing") name the launcher
+        as well, so they identify the other player once one name is known.
+        """
+        singles: dict[str, int] = {}
+        pairs: list[tuple[str, str, int]] = []
+        found: dict[str, int] = {}
+        oldest: datetime = msg.created_at - WORDLE_NAME_LOOKBACK
+        scanned: int = 0
+
+        async for prior in client.rest.fetch_messages(msg.channel_id, before=msg.id):
+            if prior.created_at < oldest:
+                break
+
+            scanned += 1
+
+            if (
+                prior.author.id != WORDLE_BOT_ID
+                or not prior.content
+                or not prior.interaction_metadata
+            ):
+                continue
+
+            playing: Match[str] | None = re.fullmatch(
+                REGEX_WORDLE_PLAYING, prior.content.strip()
+            )
+
+            if not playing:
+                continue
+
+            launcher: int = int(prior.interaction_metadata.user.id)
+            players: str = playing.group("players")
+
+            if playing.group("verb") in ("was", "is"):
+                # Newest first, so the most recent use of a name takes precedence
+                singles.setdefault(WordleOps._unescape(players), launcher)
+            elif not re.search(REGEX_WORDLE_PLAYING_OTHERS, players):
+                pair: list[str] = re.split(REGEX_WORDLE_PLAYING_SEPARATOR, players)
+
+                if len(pair) == 2:
+                    pairs.append(
+                        (
+                            WordleOps._unescape(pair[0]),
+                            WordleOps._unescape(pair[1]),
+                            launcher,
+                        )
+                    )
+
+            found = WordleOps._derive_activity_names(singles, pairs)
+
+            if names <= found.keys():
+                break
+
+        logger.debug(
+            f"Scanned {scanned:,} messages preceding Wordle streak message {msg.id} for Wordle Activity names"
+        )
+        logger.trace(f"{singles=} {pairs=}")
+
+        return {name: found[name] for name in names if name in found}
+
+    @staticmethod
+    def _derive_activity_names(
+        singles: dict[str, int], pairs: list[tuple[str, str, int]]
+    ) -> dict[str, int]:
+        """
+        Combine single and two-player Wordle Activity sessions into a name to ID map.
+
+        The launcher of a two-player session is one of its two names, so when one name
+        is known to belong to someone else, the other name belongs to the launcher.
+        """
+        names: dict[str, int] = dict(singles)
+        changed: bool = True
+
+        while changed:
+            changed = False
+
+            for first, second, launcher in pairs:
+                for name, other in ((first, second), (second, first)):
+                    if name in names or other not in names:
+                        continue
+                    elif names[other] != launcher:
+                        names[name] = launcher
+                        changed = True
+
+        return names
 
     @staticmethod
     async def _resolve_streak_puzzle(
