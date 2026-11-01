@@ -1103,16 +1103,22 @@ class WordleOps:
                 id: (day, solution)
                 for id, day, solution in (
                     await session.exec(
-                        select(WordlePuzzle.id, WordlePuzzle.day, WordlePuzzle.solution)
+                        select(
+                            col(WordlePuzzle.id),
+                            col(WordlePuzzle.day),
+                            col(WordlePuzzle.solution),
+                        )
                     )
                 ).all()
             }
             days: dict[date, int] = {day: id for id, (day, _) in puzzles.items()}
-            players: set[int] = set((await session.exec(select(Player.id))).all())
+            players: set[int] = set((await session.exec(select(col(Player.id)))).all())
             results: dict[str, int] = {
                 id: attempts
                 for id, attempts in (
-                    await session.exec(select(WordleResult.id, WordleResult.attempts))
+                    await session.exec(
+                        select(col(WordleResult.id), col(WordleResult.attempts))
+                    )
                 ).all()
             }
             streaks: dict[int, tuple[int, int]] = {
@@ -1120,9 +1126,9 @@ class WordleOps:
                 for id, channel_id, puzzle_id in (
                     await session.exec(
                         select(
-                            WordleStreak.id,
-                            WordleStreak.channel_id,
-                            WordleStreak.puzzle_id,
+                            col(WordleStreak.id),
+                            col(WordleStreak.channel_id),
+                            col(WordleStreak.puzzle_id),
                         )
                     )
                 ).all()
@@ -1141,6 +1147,7 @@ class WordleOps:
                     not isinstance(id, int)
                     or not isinstance(solution, str)
                     or not solution
+                    or day is None
                     or day != WordleOps.puzzle_day_for_id(id)
                 ):
                     logger.warning(
