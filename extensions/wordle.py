@@ -2,6 +2,7 @@
 
 import re
 from asyncio import sleep, to_thread
+from collections import Counter
 from datetime import date, datetime, timedelta
 from operator import pos
 from re import Match, Pattern
@@ -469,6 +470,10 @@ async def command_wordle_leaderboard(
                 CommandChoice(
                     name=WordleLeaderboardType.COMPLETIONS,
                     value=WordleLeaderboardType.COMPLETIONS,
+                ),
+                CommandChoice(
+                    name=WordleLeaderboardType.SEASONAL_WINS,
+                    value=WordleLeaderboardType.SEASONAL_WINS,
                 ),
             ],
         ),
@@ -1062,10 +1067,10 @@ class WordleOps:
         client: GatewayClient,
         category: WordleLeaderboardType,
         season: Season | None,
-        limit: int,
+        limit: int | None,
         direction: str,
     ) -> list[WordleStats]:
-        """Get the top Players' WordleStats for the given season, ordered by the given category."""
+        """Get the top Players' WordleStats for the given season, ordered by the given category. A limit of None returns all Players."""
         engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
         statement: Select[*tuple[Any, ...]] = WordleOps._stats_statement(season)
         stats = statement.selected_columns
@@ -1115,26 +1120,107 @@ class WordleOps:
         season: Season | None,
     ) -> ContainerComponentBuilder:
         """Get the formatted leaderboard message for the given category and season."""
-        title, field, unit = LEADERBOARDS[category]
-        players: list[WordleStats] = await WordleOps.get_leaderboard(
-            plugin.client, category, season, limit, direction
-        )
+        title: str
+        unit: str
+        label: str
+        caption: str
+        players: list[tuple[int, int]]  # (player_id, value)
+
+        if category == WordleLeaderboardType.SEASONAL_WINS:
+            # Seasonal wins span every completed season, regardless of the selected season
+            seasons: list[Season] = await WordleOps.get_completed_seasons(plugin.client)
+
+            if not seasons:
+                return Templates.generic(
+                    TemplateType.INFO, "No Wordle seasons have been completed yet."
+                )
+
+            title, unit, label = "Wordle Seasonal Wins Leaderboard", "wins", category
+            caption = f"All-Time · **{len(seasons):,}** completed season{'' if len(seasons) == 1 else 's'}"
+            players = await WordleOps.get_leaderboard_wins(
+                plugin.client, seasons, limit, direction
+            )
+        else:
+            title, field, unit = LEADERBOARDS[category]
+            label, caption = season_label(season), season_caption(season)
+            players = [
+                (stats.player_id, getattr(stats, field))
+                for stats in await WordleOps.get_leaderboard(
+                    plugin.client, category, season, limit, direction
+                )
+            ]
 
         if not players:
             return Templates.generic(
                 TemplateType.INFO,
-                f"Not enough player data available to populate the {season_label(season)} leaderboard.",
+                f"Not enough player data available to populate the {label} leaderboard.",
             )
 
         board: str = f"## {title}"
-        board += f"\n-# {season_caption(season)}"
+        board += f"\n-# {caption}"
 
-        for pos, player in enumerate(players, start=1):
-            board += (
-                f"\n{pos}. <@{player.player_id}>: **{getattr(player, field):,}** {unit}"
-            )
+        for pos, (player_id, value) in enumerate(players, start=1):
+            board += f"\n{pos}. <@{player_id}>: **{value:,}** {unit}"
 
         return Templates.generic_thumb(TemplateType.SUCCESS, board, WORDLE_ICON)
+
+    @staticmethod
+    async def get_completed_seasons(client: GatewayClient) -> list[Season]:
+        """Get the seasons that have ended since the earliest WordlePuzzle, newest first."""
+        first: date | None = await WordleOps.get_first_puzzle_day(client)
+        now: date = today()
+
+        if not first:
+            return []
+
+        return [
+            season for season in Season.span(min(first, now), now) if season.end < now
+        ]
+
+    @staticmethod
+    async def get_season_winners(client: GatewayClient, season: Season) -> list[int]:
+        """Get the Players in first place of the given season's points leaderboard, sharing it when tied on every tiebreaker."""
+        standings: list[WordleStats] = await WordleOps.get_leaderboard(
+            client, WordleLeaderboardType.POINTS, season, None, Direction.DESCENDING
+        )
+
+        def placement(stats: WordleStats) -> tuple[int, int, int]:
+            """Return the values that rank a Player on the points leaderboard."""
+            return (stats.points, stats.points_gross, stats.average_attempts)
+
+        winners: list[int] = [
+            stats.player_id
+            for stats in standings
+            if placement(stats) == placement(standings[0])
+        ]
+
+        logger.debug(f"Found {len(winners):,} winners of {season.label}")
+        logger.trace(f"{winners=}")
+
+        return winners
+
+    @staticmethod
+    async def get_leaderboard_wins(
+        client: GatewayClient, seasons: list[Season], limit: int, direction: str
+    ) -> list[tuple[int, int]]:
+        """Get the top Players ordered by their count of wins across the given seasons, as (player_id, wins)."""
+        wins: Counter[int] = Counter()
+
+        for season in seasons:
+            wins.update(await WordleOps.get_season_winners(client, season))
+
+        players: list[tuple[int, int]] = sorted(
+            wins.items(),
+            key=lambda entry: entry[1],
+            reverse=direction != Direction.ASCENDING,
+        )[:limit]
+
+        logger.debug(
+            f"Found {len(players):,} players for Wordle seasonal wins leaderboard"
+        )
+        logger.trace(f"{players=}")
+
+        return players
 
     @staticmethod
     async def count_results(client: GatewayClient) -> int:

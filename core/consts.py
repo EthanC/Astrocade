@@ -101,6 +101,7 @@ class WordleLeaderboardType(StrEnum):
     FAILS = auto()
     ACES = auto()
     COMPLETIONS = auto()
+    SEASONAL_WINS = "Seasonal Wins"
 
 
 class WordlePoints(IntEnum):
