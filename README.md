@@ -42,7 +42,7 @@ services:
 ### Standalone
 
 > [!NOTE]
-> Astrocade targets Python 3.14 and newer. Compatibility with earlier versions is not guaranteed.
+> Astrocade targets Python 3.15 and newer. Compatibility with earlier versions is not guaranteed.
 
 Install Python and the required dependencies with [uv](https://github.com/astral-sh/uv):
 
@@ -55,7 +55,7 @@ Rename `.env.example` to `.env` and configure your environment.
 Run Astrocade with uv.
 
 ```
-uv run astrocade.py -OO
+uv run python -OO astrocade.py
 ```
 
 ### Configuration
