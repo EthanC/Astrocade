@@ -33,6 +33,11 @@ def timestamp_day(day: date) -> str:
     return f"<t:{int(datetime.combine(day, time(12), TZ).timestamp())}:D>"
 
 
+def timestamp_relative(moment: datetime) -> str:
+    """Format a moment as a Discord relative timestamp (e.g. "in 29 days")."""
+    return f"<t:{int(moment.timestamp())}:R>"
+
+
 @dataclass(frozen=True, slots=True, order=True)
 class Season:
     """Represents a Wordle season, the calendar range that player stats accumulate over."""
@@ -113,6 +118,11 @@ class Season:
         return self.next.start - timedelta(days=1)
 
     @property
+    def ends_at(self: Self) -> datetime:
+        """Moment the season ends: midnight after its last day, in the configured time zone."""
+        return datetime.combine(self.next.start, time(), TZ)
+
+    @property
     def key(self: Self) -> str:
         """Stable identifier of the season (e.g. "2026-4")."""
         return f"{self.year}-{self.number}"
@@ -147,15 +157,13 @@ def season_label(season: Season | None) -> str:
 
 
 def season_caption(season: Season | None, on: date | None = None) -> str:
-    """Describe a season as days remaining (ongoing) or dates covered (otherwise). None is All-Time."""
+    """Describe a season as when it ends (ongoing) or dates covered (otherwise). None is All-Time."""
     if season is None:
         return season_label(season)
 
     on = on or today()
 
     if season.contains(on):
-        remaining: int = season.days_remaining(on)
-
-        return f"{season.label} · **{remaining:,}** day{'' if remaining == 1 else 's'} remaining"
+        return f"{season.label} · Season ends {timestamp_relative(season.ends_at)}"
 
     return f"{season.label} · {season.dates}"
