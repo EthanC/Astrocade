@@ -1705,6 +1705,62 @@ class WordleOps:
         return Templates.generic_thumb(TemplateType.SUCCESS, board, WORDLE_ICON)
 
     @staticmethod
+    async def get_streak_message(
+        client: GatewayClient, puzzle: WordlePuzzle
+    ) -> ContainerComponentBuilder:
+        """Get the formatted reply to a streak message: the season points leaderboard and the Players who did not finish the given WordlePuzzle."""
+        # Streaks report yesterday's results, which may close out a season
+        season: Season = Season.for_day(puzzle.day)
+        container: ContainerComponentBuilder = await WordleOps.get_leaderboard_message(
+            WordleLeaderboardType.POINTS, 10, Direction.DESCENDING, season
+        )
+        dnf: list[int] = await WordleOps.get_dnf_players(client, puzzle, season)
+
+        if dnf:
+            container.add_text_display(
+                f"### DNF\n-# Played {season.label} but not puzzle `{puzzle.id}`."
+                f"\n{', '.join(f'<@{player_id}>' for player_id in dnf)}"
+            )
+
+        return container
+
+    @staticmethod
+    async def get_dnf_players(
+        client: GatewayClient, puzzle: WordlePuzzle, season: Season
+    ) -> list[int]:
+        """Get the Players with a WordleResult in the given season but none for the given WordlePuzzle."""
+        engine: AsyncEngine = client.get_type_dependency(AsyncEngine)
+
+        async with AsyncSession(engine) as session:
+            statement: SelectOfScalar[int] = (
+                select(col(WordleResult.player_id))
+                .join(WordlePuzzle, col(WordlePuzzle.id) == col(WordleResult.puzzle_id))
+                .where(WordleOps._season_filter(season))
+                .where(
+                    col(WordleResult.player_id).not_in(
+                        select(WordleResult.player_id).where(
+                            WordleResult.puzzle_id == puzzle.id
+                        )
+                    )
+                )
+                .distinct()
+                .order_by(col(WordleResult.player_id))
+            )
+
+            logger.debug(f"Find {season.label} players missing puzzle {puzzle.id}")
+            logger.trace(f"{statement=}\n{engine=}\n{session=}")
+
+            results: ScalarResult[int] = await session.exec(statement)
+            players: list[int] = list(results.all())
+
+            logger.debug(
+                f"Found {len(players):,} players who did not finish puzzle {puzzle.id}"
+            )
+            logger.trace(f"{players=}")
+
+            return players
+
+    @staticmethod
     async def get_completed_seasons(client: GatewayClient) -> list[Season]:
         """Get the seasons that have ended since the earliest WordlePuzzle, newest first."""
         first: date | None = await WordleOps.get_first_puzzle_day(client)
@@ -2117,13 +2173,7 @@ class WordleOps:
         if results and event:
             await client.rest.create_message(
                 msg.channel_id,
-                component=await WordleOps.get_leaderboard_message(
-                    WordleLeaderboardType.POINTS,
-                    10,
-                    Direction.DESCENDING,
-                    # Streaks report yesterday's results, which may close out a season
-                    Season.for_day(puzzle.day),
-                ),
+                component=await WordleOps.get_streak_message(client, puzzle),
                 reply=msg.id,
             )
 
