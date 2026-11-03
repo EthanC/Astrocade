@@ -1658,13 +1658,18 @@ class WordleOps:
         limit: int,
         direction: str,
         season: Season | None,
+        *,
+        completions: bool = False,
     ) -> ContainerComponentBuilder:
-        """Get the formatted leaderboard message for the given category and season."""
+        """Get the formatted leaderboard message for the given category and season.
+
+        When completions is set, each entry also shows the Player's completions. Seasonal wins ignore it.
+        """
         title: str
         unit: str
         label: str
         caption: str
-        players: list[tuple[int, int]]  # (player_id, value)
+        players: list[tuple[int, int, str]]  # (player_id, value, suffix)
 
         if category == WordleLeaderboardType.SEASONAL_WINS:
             # Seasonal wins span every completed season, regardless of the selected season
@@ -1677,14 +1682,21 @@ class WordleOps:
 
             title, unit, label = "Wordle Seasonal Wins Leaderboard", "wins", category
             caption = f"All-Time · **{len(seasons):,}** completed season{'' if len(seasons) == 1 else 's'}"
-            players = await WordleOps.get_leaderboard_wins(
-                plugin.client, seasons, limit, direction
-            )
+            players = [
+                (player_id, wins, "")
+                for player_id, wins in await WordleOps.get_leaderboard_wins(
+                    plugin.client, seasons, limit, direction
+                )
+            ]
         else:
             title, field, unit = LEADERBOARDS[category]
             label, caption = season_label(season), season_caption(season)
             players = [
-                (stats.player_id, getattr(stats, field))
+                (
+                    stats.player_id,
+                    getattr(stats, field),
+                    f" ({stats.completions:,} completions)" if completions else "",
+                )
                 for stats in await WordleOps.get_leaderboard(
                     plugin.client, category, season, limit, direction
                 )
@@ -1699,8 +1711,8 @@ class WordleOps:
         board: str = f"## {title}"
         board += f"\n-# {caption}"
 
-        for pos, (player_id, value) in enumerate(players, start=1):
-            board += f"\n{pos}. <@{player_id}>: **{value:,}** {unit}"
+        for pos, (player_id, value, suffix) in enumerate(players, start=1):
+            board += f"\n{pos}. <@{player_id}>: **{value:,}** {unit}{suffix}"
 
         return Templates.generic_thumb(TemplateType.SUCCESS, board, WORDLE_ICON)
 
@@ -1712,7 +1724,11 @@ class WordleOps:
         # Streaks report yesterday's results, which may close out a season
         season: Season = Season.for_day(puzzle.day)
         container: ContainerComponentBuilder = await WordleOps.get_leaderboard_message(
-            WordleLeaderboardType.POINTS, 10, Direction.DESCENDING, season
+            WordleLeaderboardType.POINTS,
+            10,
+            Direction.DESCENDING,
+            season,
+            completions=True,
         )
         dnf: list[int] = await WordleOps.get_dnf_players(client, puzzle, season)
 
