@@ -1663,7 +1663,7 @@ class WordleOps:
     ) -> ContainerComponentBuilder:
         """Get the formatted leaderboard message for the given category and season.
 
-        When completions is set, each entry also shows the Player's completions. Seasonal wins ignore it.
+        When completions is set, each entry also shows the Player's completions out of the season's puzzles. Seasonal wins ignore it.
         """
         title: str
         unit: str
@@ -1691,11 +1691,16 @@ class WordleOps:
         else:
             title, field, unit = LEADERBOARDS[category]
             label, caption = season_label(season), season_caption(season)
+            total: int = (
+                await WordleOps.count_puzzles(plugin.client, season)
+                if completions
+                else 0
+            )
             players = [
                 (
                     stats.player_id,
                     getattr(stats, field),
-                    f" ({stats.completions:,} completions)" if completions else "",
+                    f" ({stats.completions:,}/{total:,})" if completions else "",
                 )
                 for stats in await WordleOps.get_leaderboard(
                     plugin.client, category, season, limit, direction
