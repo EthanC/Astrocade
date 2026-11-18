@@ -1739,7 +1739,7 @@ class WordleOps:
 
         if dnf:
             container.add_text_display(
-                f"### DNF\n-# Played {season.label} but not puzzle `{puzzle.id}`."
+                f"### DNF\n-# Did not complete puzzle `{puzzle.id}`."
                 f"\n{'\n'.join(f'- <@{player_id}>' for player_id in dnf)}"
             )
 
