@@ -117,6 +117,9 @@ SEASON_ALL_TIME: Final[str] = "all"
 SEASON_PAGE_PREFIX: Final[str] = "wordle_season"
 """Custom ID prefix of the buttons that page command output between seasons."""
 
+STATS_BUTTON_ID: Final[str] = "wordle_stats"
+"""Custom ID of the button that shows the presser's current season statistics."""
+
 LEADERBOARDS: Final[dict[WordleLeaderboardType, tuple[str, str, str]]] = {
     WordleLeaderboardType.POINTS: ("Wordle Points Leaderboard", "points", "points"),
     WordleLeaderboardType.POINTS_GROSS: (
@@ -800,6 +803,34 @@ async def event_wordle_season_page(event: ComponentInteractionCreateEvent) -> No
     await interaction.edit_initial_response(
         components=await WordleOps.with_season_pages(
             plugin.client, container, command, season, *args
+        )
+    )
+
+
+@plugin.listen()
+async def event_wordle_stats_button(event: ComponentInteractionCreateEvent) -> None:
+    """Handle My Stats button presses by replying with the presser's statistics, as /wordle stats does by default."""
+    interaction: ComponentInteraction = event.interaction
+
+    if interaction.custom_id != STATS_BUTTON_ID:
+        return
+
+    logger.info(f"Stats button used by {interaction.user.display_name}")
+    logger.trace(f"{interaction=}")
+
+    await interaction.create_initial_response(ResponseType.DEFERRED_MESSAGE_CREATE)
+
+    season: Season | None = WordleOps.resolve_season(None)
+
+    await interaction.edit_initial_response(
+        components=await WordleOps.with_season_pages(
+            plugin.client,
+            await WordleOps.get_stats_message(
+                plugin.client, interaction.user.id, season
+            ),
+            "stats",
+            season,
+            interaction.user.id,
         )
     )
 
@@ -1724,8 +1755,8 @@ class WordleOps:
     @staticmethod
     async def get_streak_message(
         client: GatewayClient, puzzle: WordlePuzzle
-    ) -> ContainerComponentBuilder:
-        """Get the formatted reply to a streak message: the season points leaderboard and the Players who did not finish the given WordlePuzzle."""
+    ) -> list[ComponentBuilder]:
+        """Get the formatted reply to a streak message: the season points leaderboard, the Players who did not finish the given WordlePuzzle, and a My Stats button."""
         # Streaks report yesterday's results, which may close out a season
         season: Season = Season.for_day(puzzle.day)
         container: ContainerComponentBuilder = await WordleOps.get_leaderboard_message(
@@ -1743,7 +1774,12 @@ class WordleOps:
                 f"\n{'\n'.join(f'- <@{player_id}>' for player_id in dnf)}"
             )
 
-        return container
+        row: MessageActionRowBuilder = MessageActionRowBuilder()
+        row.add_interactive_button(
+            ButtonStyle.SECONDARY, STATS_BUTTON_ID, label="My Stats"
+        )
+
+        return [container, row]
 
     @staticmethod
     async def get_dnf_players(
@@ -2194,7 +2230,7 @@ class WordleOps:
         if results and event:
             await client.rest.create_message(
                 msg.channel_id,
-                component=await WordleOps.get_streak_message(client, puzzle),
+                components=await WordleOps.get_streak_message(client, puzzle),
                 reply=msg.id,
             )
 
