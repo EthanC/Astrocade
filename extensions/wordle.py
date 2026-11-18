@@ -1770,7 +1770,7 @@ class WordleOps:
 
         if dnf:
             container.add_text_display(
-                f"### DNF\n-# Did not complete puzzle `{puzzle.id}`."
+                f"### DNF\n-# **{len(dnf):,}** player{'' if len(dnf) == 1 else 's'} did not complete puzzle `{puzzle.id}`."
                 f"\n{'\n'.join(f'- <@{player_id}>' for player_id in dnf)}"
             )
 
